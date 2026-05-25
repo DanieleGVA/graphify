@@ -1,6 +1,8 @@
-# Architecture
+# Architecture (legacy `graphify` 0.8.x)
 
-graphify is a Claude Code skill backed by a Python library. The skill orchestrates the library; the library can be used standalone.
+> **Notice.** This document describes the architecture of the legacy `graphify` package, which is being evolved into **Enterpriphy** (PyPI `enterpriphy`). For the target architecture see [`ARCHITECTURE_v2.md`](./ARCHITECTURE_v2.md), and for the rollout plan see [`MIGRATION_PLAN.md`](./MIGRATION_PLAN.md). The Python package directory has been renamed `graphify/` → `enterpriphy/`; module paths throughout this document should be read as `enterpriphy.<module>`.
+
+graphify (now `enterpriphy`) is a Claude Code skill backed by a Python library. The skill orchestrates the library; the library can be used standalone.
 
 ## Pipeline
 

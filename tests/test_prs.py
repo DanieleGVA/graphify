@@ -8,7 +8,7 @@ from unittest.mock import patch, MagicMock
 import networkx as nx
 import pytest
 
-from graphify.prs import (
+from enterpriphy.prs import (
     PRInfo,
     _classify,
     _parse_ci,

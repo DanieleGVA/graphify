@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-import graphify.__main__ as mainmod
+import enterpriphy.__main__ as mainmod
 
 
 # A representative slice of the pre-fix text. Each platform's old install

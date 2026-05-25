@@ -38,7 +38,7 @@ def _graph_to_json(G, path):
 # ── build.py helpers ──────────────────────────────────────────────────────────
 
 def test_prefix_graph_preserves_label():
-    from graphify.build import prefix_graph_for_global
+    from enterpriphy.build import prefix_graph_for_global
     G = _make_graph([{"id": "userservice", "label": "UserService", "source_file": "src/user.py"}])
     H = prefix_graph_for_global(G, "repoA")
     assert "repoA::userservice" in H.nodes
@@ -47,7 +47,7 @@ def test_prefix_graph_preserves_label():
 
 
 def test_prefix_graph_sets_repo_and_local_id():
-    from graphify.build import prefix_graph_for_global
+    from enterpriphy.build import prefix_graph_for_global
     G = _make_graph([{"id": "userservice", "label": "UserService"}])
     H = prefix_graph_for_global(G, "repoA")
     data = H.nodes["repoA::userservice"]
@@ -56,7 +56,7 @@ def test_prefix_graph_sets_repo_and_local_id():
 
 
 def test_prefix_graph_rewrites_edges():
-    from graphify.build import prefix_graph_for_global
+    from enterpriphy.build import prefix_graph_for_global
     G = _make_graph(
         [{"id": "a", "label": "A"}, {"id": "b", "label": "B"}],
         [{"source": "a", "target": "b"}],
@@ -67,7 +67,7 @@ def test_prefix_graph_rewrites_edges():
 
 
 def test_prune_repo_removes_correct_nodes():
-    from graphify.build import prune_repo_from_graph
+    from enterpriphy.build import prune_repo_from_graph
     G = nx.Graph()
     G.add_node("repoA::userservice", repo="repoA", label="UserService")
     G.add_node("repoB::userservice", repo="repoB", label="UserService")
@@ -80,7 +80,7 @@ def test_prune_repo_removes_correct_nodes():
 
 
 def test_prune_repo_returns_zero_if_not_present():
-    from graphify.build import prune_repo_from_graph
+    from enterpriphy.build import prune_repo_from_graph
     G = nx.Graph()
     G.add_node("repoA::x", repo="repoA")
     removed = prune_repo_from_graph(G, "repoB")
@@ -99,7 +99,7 @@ def test_global_add_creates_global_graph(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_add
+        from enterpriphy.global_graph import global_add
         result = global_add(src_graph, "repoA")
 
     assert result["skipped"] is False
@@ -119,7 +119,7 @@ def test_global_add_skip_on_unchanged_hash(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_add
+        from enterpriphy.global_graph import global_add
         global_add(src_graph, "repoA")
         result2 = global_add(src_graph, "repoA")
 
@@ -140,7 +140,7 @@ def test_global_add_two_repos_no_collision(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_graph_path), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_manifest_path):
-        from graphify.global_graph import global_add, _load_global_graph
+        from enterpriphy.global_graph import global_add, _load_global_graph
         global_add(g1, "repoA")
         global_add(g2, "repoB")
         G = _load_global_graph()
@@ -159,7 +159,7 @@ def test_global_remove(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_add, global_remove
+        from enterpriphy.global_graph import global_add, global_remove
         global_add(src_graph, "repoA")
         removed = global_remove("repoA")
 
@@ -169,7 +169,7 @@ def test_global_remove(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir2), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir2 / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir2 / "global-manifest.json"):
-        from graphify.global_graph import global_list
+        from enterpriphy.global_graph import global_list
         repos = global_list()
     assert "repoA" not in repos
 
@@ -179,7 +179,7 @@ def test_global_remove_unknown_tag_raises(tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_remove
+        from enterpriphy.global_graph import global_remove
         with pytest.raises(KeyError):
             global_remove("nonexistent")
 
@@ -195,7 +195,7 @@ def test_global_add_collision_warning(tmp_path, capsys):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_add
+        from enterpriphy.global_graph import global_add
         global_add(g1, "myrepo")
         global_add(g2, "myrepo")  # different source path, same tag
 
@@ -206,7 +206,7 @@ def test_global_add_collision_warning(tmp_path, capsys):
 # ── dedup guard ───────────────────────────────────────────────────────────────
 
 def test_dedup_raises_on_cross_repo_nodes():
-    from graphify.dedup import deduplicate_entities
+    from enterpriphy.dedup import deduplicate_entities
     nodes = [
         {"id": "repoA::userservice", "label": "UserService", "repo": "repoA"},
         {"id": "repoB::userservice", "label": "UserService", "repo": "repoB"},
@@ -216,7 +216,7 @@ def test_dedup_raises_on_cross_repo_nodes():
 
 
 def test_dedup_ok_with_single_repo():
-    from graphify.dedup import deduplicate_entities
+    from enterpriphy.dedup import deduplicate_entities
     nodes = [
         {"id": "repoA::userservice", "label": "UserService", "repo": "repoA"},
         {"id": "repoA::auth", "label": "Auth", "repo": "repoA"},
@@ -226,7 +226,7 @@ def test_dedup_ok_with_single_repo():
 
 
 def test_dedup_ok_with_no_repo_attr():
-    from graphify.dedup import deduplicate_entities
+    from enterpriphy.dedup import deduplicate_entities
     nodes = [
         {"id": "userservice", "label": "UserService"},
         {"id": "auth", "label": "Auth"},
@@ -239,7 +239,7 @@ def test_dedup_ok_with_no_repo_attr():
 
 def test_merge_graphs_prefixes_ids(tmp_path):
     """merge-graphs should prefix node IDs with repo name to avoid silent collision."""
-    from graphify.build import prefix_graph_for_global
+    from enterpriphy.build import prefix_graph_for_global
     from networkx.readwrite import json_graph as jg
 
     # Two graphs with same node ID
@@ -293,6 +293,6 @@ def test_global_add_rejects_oversized_source_graph(monkeypatch, tmp_path):
     with patch("graphify.global_graph._GLOBAL_DIR", global_dir), \
          patch("graphify.global_graph._GLOBAL_GRAPH", global_dir / "global-graph.json"), \
          patch("graphify.global_graph._GLOBAL_MANIFEST", global_dir / "global-manifest.json"):
-        from graphify.global_graph import global_add
+        from enterpriphy.global_graph import global_add
         with pytest.raises(ValueError, match="exceeds"):
             global_add(src_graph, "repoA")

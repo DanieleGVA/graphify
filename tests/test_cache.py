@@ -1,7 +1,7 @@
 """Tests for graphify/cache.py."""
 import pytest
 from pathlib import Path
-from graphify.cache import file_hash, cache_dir, load_cached, save_cached, cached_files, clear_cache, _body_content
+from enterpriphy.cache import file_hash, cache_dir, load_cached, save_cached, cached_files, clear_cache, _body_content
 
 
 @pytest.fixture

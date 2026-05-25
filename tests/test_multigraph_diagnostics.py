@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-import graphify.__main__ as mainmod
-from graphify.diagnostics import (
+import enterpriphy.__main__ as mainmod
+from enterpriphy.diagnostics import (
     diagnose_extraction,
     diagnose_file,
     format_diagnostic_json,

@@ -32,10 +32,10 @@ def _make_graph(tmp_path: Path) -> Path:
     out.mkdir()
 
     extraction = json.loads((FIXTURES / "extraction.json").read_text())
-    from graphify.build import build_from_json
-    from graphify.cluster import cluster, score_all
-    from graphify.analyze import god_nodes, surprising_connections
-    from graphify.export import to_json
+    from enterpriphy.build import build_from_json
+    from enterpriphy.cluster import cluster, score_all
+    from enterpriphy.analyze import god_nodes, surprising_connections
+    from enterpriphy.export import to_json
 
     G = build_from_json(extraction)
     communities = cluster(G)

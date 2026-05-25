@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from graphify.security import (
+from enterpriphy.security import (
     check_graph_file_size_cap,
     sanitize_label,
     sanitize_metadata,

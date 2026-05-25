@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from graphify.callflow_html import derive_sections_from_communities, write_callflow_html
+from enterpriphy.callflow_html import derive_sections_from_communities, write_callflow_html
 
 
 def _make_graphify_out(tmp_path: Path) -> Path:
@@ -174,7 +174,7 @@ def test_load_graph_rejects_oversized_file(monkeypatch, tmp_path):
     """#F4: callflow_html.load_graph must refuse to read a graph.json that
     exceeds the size cap (SystemExit via translated ValueError)."""
     import pytest
-    from graphify.callflow_html import load_graph
+    from enterpriphy.callflow_html import load_graph
 
     graph_path = tmp_path / "graph.json"
     graph_path.write_text(

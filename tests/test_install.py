@@ -19,7 +19,7 @@ PLATFORMS = {
 
 
 def _install(tmp_path, platform):
-    from graphify.__main__ import install
+    from enterpriphy.__main__ import install
     old_cwd = Path.cwd()
     try:
         os.chdir(tmp_path)
@@ -45,7 +45,7 @@ def test_install_opencode(tmp_path):
 
 
 def test_install_positional_platform_opencode(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["graphify", "install", "opencode"])
     with patch("graphify.__main__.Path.home", return_value=tmp_path):
@@ -55,7 +55,7 @@ def test_install_positional_platform_opencode(tmp_path, monkeypatch):
 
 
 def test_install_project_claude_writes_project_scope(tmp_path, monkeypatch, capsys):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -72,7 +72,7 @@ def test_install_project_claude_writes_project_scope(tmp_path, monkeypatch, caps
 
 
 def test_install_project_codex_writes_skill_and_agents(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -87,7 +87,7 @@ def test_install_project_codex_writes_skill_and_agents(tmp_path, monkeypatch):
 
 
 def test_claude_subcommand_project_install_and_uninstall_are_project_scoped(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -113,7 +113,7 @@ def test_claude_subcommand_project_install_and_uninstall_are_project_scoped(tmp_
 
 
 def test_codex_subcommand_project_install_and_uninstall_are_project_scoped(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -141,7 +141,7 @@ def test_codex_subcommand_project_install_and_uninstall_are_project_scoped(tmp_p
 
 
 def test_antigravity_install_project_writes_project_skill(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -154,7 +154,7 @@ def test_antigravity_install_project_writes_project_skill(tmp_path, monkeypatch)
 
 
 def test_install_help_does_not_install_default(tmp_path, monkeypatch, capsys):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["graphify", "install", "opencode", "--help"])
     with patch("graphify.__main__.Path.home", return_value=tmp_path):
@@ -198,14 +198,14 @@ def test_install_unknown_platform_exits(tmp_path):
 
 def test_codex_skill_contains_spawn_agent():
     """Codex skill file must reference spawn_agent."""
-    import graphify
+    import enterpriphy
     skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text()
     assert "spawn_agent" in skill
 
 
 def test_codex_skill_uses_graphify_with_dirty_graph_output():
     """Codex skill must keep graph-first orientation even when graph output is dirty."""
-    import graphify
+    import enterpriphy
     skill = (Path(graphify.__file__).parent / "skill-codex.md").read_text()
     assert "Dirty `graphify-out/` artifacts are expected" in skill
     assert "not a reason to skip Graphify" in skill
@@ -223,14 +223,14 @@ def test_codex_agents_install_mentions_dirty_graph_output(tmp_path):
 
 def test_opencode_skill_contains_mention():
     """OpenCode skill file must reference @mention."""
-    import graphify
+    import enterpriphy
     skill = (Path(graphify.__file__).parent / "skill-opencode.md").read_text()
     assert "@mention" in skill
 
 
 def test_opencode_skill_uses_opencode_agent_guidance():
     """OpenCode skill must not reference Codex/Claude agent type names."""
-    import graphify
+    import enterpriphy
     skill = (Path(graphify.__file__).parent / "skill-opencode.md").read_text()
     assert "general-purpose" not in skill
     assert 'subagent_type="general-purpose"' not in skill
@@ -244,7 +244,7 @@ def test_opencode_skill_uses_opencode_agent_guidance():
 
 def test_claw_skill_is_sequential():
     """OpenClaw skill file must describe sequential extraction."""
-    import graphify
+    import enterpriphy
     skill = (Path(graphify.__file__).parent / "skill-claw.md").read_text()
     assert "sequential" in skill.lower()
     assert "spawn_agent" not in skill
@@ -253,7 +253,7 @@ def test_claw_skill_is_sequential():
 
 def test_all_skill_files_exist_in_package():
     """All installable platform skill files must be present in the installed package."""
-    import graphify
+    import enterpriphy
     pkg = Path(graphify.__file__).parent
     for name in ("skill.md", "skill-codex.md", "skill-opencode.md", "skill-claw.md", "skill-windows.md", "skill-droid.md", "skill-trae.md"):
         assert (pkg / name).exists(), f"Missing: {name}"
@@ -271,7 +271,7 @@ def test_codex_install_does_not_write_claude_md(tmp_path):
 
 
 def test_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -290,7 +290,7 @@ def test_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
 
 
 def test_uninstall_project_without_platform_removes_project_installs(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -309,7 +309,7 @@ def test_uninstall_project_without_platform_removes_project_installs(tmp_path, m
 
 
 def test_antigravity_uninstall_project_removes_project_skill_only(tmp_path, monkeypatch):
-    from graphify.__main__ import main
+    from enterpriphy.__main__ import main
     home = tmp_path / "home"
     project = tmp_path / "project"
     project.mkdir()
@@ -329,12 +329,12 @@ def test_antigravity_uninstall_project_removes_project_skill_only(tmp_path, monk
 # --- always-on AGENTS.md install/uninstall tests ---
 
 def _agents_install(tmp_path, platform):
-    from graphify.__main__ import _agents_install as _install_fn
+    from enterpriphy.__main__ import _agents_install as _install_fn
     _install_fn(tmp_path, platform)
 
 
 def _agents_uninstall(tmp_path, platform=""):
-    from graphify.__main__ import _agents_uninstall as _uninstall_fn
+    from enterpriphy.__main__ import _agents_uninstall as _uninstall_fn
     _uninstall_fn(tmp_path, platform=platform)
 
 
@@ -449,7 +449,7 @@ def test_opencode_agents_uninstall_removes_plugin(tmp_path):
 
 def test_cursor_install_writes_rule(tmp_path):
     """cursor install writes .cursor/rules/graphify.mdc."""
-    from graphify.__main__ import _cursor_install
+    from enterpriphy.__main__ import _cursor_install
     _cursor_install(tmp_path)
     rule = tmp_path / ".cursor" / "rules" / "graphify.mdc"
     assert rule.exists()
@@ -460,7 +460,7 @@ def test_cursor_install_writes_rule(tmp_path):
 
 def test_cursor_install_idempotent(tmp_path):
     """cursor install does not overwrite an existing rule file."""
-    from graphify.__main__ import _cursor_install
+    from enterpriphy.__main__ import _cursor_install
     _cursor_install(tmp_path)
     rule = tmp_path / ".cursor" / "rules" / "graphify.mdc"
     original = rule.read_text()
@@ -470,7 +470,7 @@ def test_cursor_install_idempotent(tmp_path):
 
 def test_cursor_uninstall_removes_rule(tmp_path):
     """cursor uninstall removes the rule file."""
-    from graphify.__main__ import _cursor_install, _cursor_uninstall
+    from enterpriphy.__main__ import _cursor_install, _cursor_uninstall
     _cursor_install(tmp_path)
     _cursor_uninstall(tmp_path)
     rule = tmp_path / ".cursor" / "rules" / "graphify.mdc"
@@ -479,14 +479,14 @@ def test_cursor_uninstall_removes_rule(tmp_path):
 
 def test_cursor_uninstall_noop_if_not_installed(tmp_path):
     """cursor uninstall does nothing if rule was never written."""
-    from graphify.__main__ import _cursor_uninstall
+    from enterpriphy.__main__ import _cursor_uninstall
     _cursor_uninstall(tmp_path)  # should not raise
 
 
 # ── Gemini CLI ────────────────────────────────────────────────────────────────
 
 def test_gemini_install_writes_gemini_md(tmp_path):
-    from graphify.__main__ import gemini_install
+    from enterpriphy.__main__ import gemini_install
     gemini_install(tmp_path)
     md = tmp_path / "GEMINI.md"
     assert md.exists()
@@ -494,21 +494,21 @@ def test_gemini_install_writes_gemini_md(tmp_path):
 
 def test_gemini_install_writes_hook(tmp_path):
     import json as _json
-    from graphify.__main__ import gemini_install
+    from enterpriphy.__main__ import gemini_install
     gemini_install(tmp_path)
     settings = _json.loads((tmp_path / ".gemini" / "settings.json").read_text())
     hooks = settings["hooks"]["BeforeTool"]
     assert any("graphify" in str(h) for h in hooks)
 
 def test_gemini_install_idempotent(tmp_path):
-    from graphify.__main__ import gemini_install
+    from enterpriphy.__main__ import gemini_install
     gemini_install(tmp_path)
     gemini_install(tmp_path)
     md = tmp_path / "GEMINI.md"
     assert md.read_text().count("## graphify") == 1
 
 def test_gemini_install_merges_existing_gemini_md(tmp_path):
-    from graphify.__main__ import gemini_install
+    from enterpriphy.__main__ import gemini_install
     (tmp_path / "GEMINI.md").write_text("# My project rules\n")
     gemini_install(tmp_path)
     content = (tmp_path / "GEMINI.md").read_text()
@@ -516,7 +516,7 @@ def test_gemini_install_merges_existing_gemini_md(tmp_path):
     assert "graphify-out/GRAPH_REPORT.md" in content
 
 def test_gemini_uninstall_removes_section(tmp_path):
-    from graphify.__main__ import gemini_install, gemini_uninstall
+    from enterpriphy.__main__ import gemini_install, gemini_uninstall
     gemini_install(tmp_path)
     gemini_uninstall(tmp_path)
     md = tmp_path / "GEMINI.md"
@@ -524,7 +524,7 @@ def test_gemini_uninstall_removes_section(tmp_path):
 
 def test_gemini_uninstall_removes_hook(tmp_path):
     import json as _json
-    from graphify.__main__ import gemini_install, gemini_uninstall
+    from enterpriphy.__main__ import gemini_install, gemini_uninstall
     gemini_install(tmp_path)
     gemini_uninstall(tmp_path)
     settings_path = tmp_path / ".gemini" / "settings.json"
@@ -534,5 +534,5 @@ def test_gemini_uninstall_removes_hook(tmp_path):
         assert not any("graphify" in str(h) for h in hooks)
 
 def test_gemini_uninstall_noop_if_not_installed(tmp_path):
-    from graphify.__main__ import gemini_uninstall
+    from enterpriphy.__main__ import gemini_uninstall
     gemini_uninstall(tmp_path)  # should not raise

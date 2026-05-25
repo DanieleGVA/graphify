@@ -11,7 +11,7 @@ or partial change is caught by CI.
 from __future__ import annotations
 import json
 
-from graphify.__main__ import (
+from enterpriphy.__main__ import (
     _SETTINGS_HOOK,
     _CLAUDE_MD_SECTION,
     _AGENTS_MD_SECTION,

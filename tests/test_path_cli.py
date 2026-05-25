@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import networkx as nx
 from networkx.readwrite import json_graph
-import graphify.__main__ as mainmod
+import enterpriphy.__main__ as mainmod
 
 
 def _write_graph(tmp_path):

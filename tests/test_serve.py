@@ -4,7 +4,7 @@ import pytest
 import networkx as nx
 from networkx.readwrite import json_graph
 
-from graphify.serve import (
+from enterpriphy.serve import (
     _communities_from_graph,
     _score_nodes,
     _compute_idf,
@@ -410,7 +410,7 @@ def test_query_seeds_from_identifier_not_noise():
 
 def test_query_graph_text_parameter_type_context_filter_changes_traversal():
     import networkx as nx
-    from graphify.serve import _query_graph_text
+    from enterpriphy.serve import _query_graph_text
 
     graph = nx.Graph()
     graph.add_node("process", label="process", source_file="sample.cs", source_location="L20")
@@ -428,7 +428,7 @@ def test_query_graph_text_parameter_type_context_filter_changes_traversal():
 
 def test_query_graph_text_context_filter_aliases_resolve():
     import networkx as nx
-    from graphify.serve import _normalize_context_filters
+    from enterpriphy.serve import _normalize_context_filters
 
     assert _normalize_context_filters(["param"]) == ["parameter_type"]
     assert _normalize_context_filters(["parameter"]) == ["parameter_type"]

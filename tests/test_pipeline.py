@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from graphify.detect import detect
-from graphify.extract import collect_files, extract
-from graphify.build import build_from_json
-from graphify.cluster import cluster, score_all
-from graphify.analyze import god_nodes, surprising_connections, suggest_questions
-from graphify.report import generate
-from graphify.export import to_json, to_html, to_obsidian
+from enterpriphy.detect import detect
+from enterpriphy.extract import collect_files, extract
+from enterpriphy.build import build_from_json
+from enterpriphy.cluster import cluster, score_all
+from enterpriphy.analyze import god_nodes, surprising_connections, suggest_questions
+from enterpriphy.report import generate
+from enterpriphy.export import to_json, to_html, to_obsidian
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

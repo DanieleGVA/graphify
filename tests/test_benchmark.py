@@ -5,7 +5,7 @@ import pytest
 import networkx as nx
 from networkx.readwrite import json_graph
 
-from graphify.benchmark import run_benchmark, print_benchmark, _query_subgraph_tokens, _SAMPLE_QUESTIONS, _safe, _hr
+from enterpriphy.benchmark import run_benchmark, print_benchmark, _query_subgraph_tokens, _SAMPLE_QUESTIONS, _safe, _hr
 
 
 def _make_graph() -> nx.Graph:

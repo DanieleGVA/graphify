@@ -1,6 +1,29 @@
 # Changelog
 
-Full release notes with details on each version: [GitHub Releases](https://github.com/safishamsi/graphify/releases)
+Full release notes with details on each version: [GitHub Releases](https://github.com/DanieleGVA/enterpriphy/releases) (Enterpriphy) · [graphify](https://github.com/safishamsi/graphify/releases) (legacy)
+
+## 1.0.0-rc.0 (2026-05-25) — Enterpriphy
+
+**Project rebrand: `graphify` → `Enterpriphy`. New PyPI package `enterpriphy`.**
+
+This is the first release-candidate of the v1 architecture documented in [`ARCHITECTURE_v2.md`](./ARCHITECTURE_v2.md) and tracked by [`MIGRATION_PLAN.md`](./MIGRATION_PLAN.md).
+
+### Phase 0 — rebrand (this release)
+
+- Package renamed: `graphify/` → `enterpriphy/`. All Python imports updated (`from graphify.X` → `from enterpriphy.X`).
+- PyPI distribution renamed: `graphifyy` → `enterpriphy`. A thin `graphify` shim package is shipped in the same wheel for backward compatibility (emits `DeprecationWarning`, re-exports from `enterpriphy`).
+- CLI: `enterpriphy ...` is now the primary command. `graphify ...` remains as an alias and will be removed in 2.0.
+- Environment variables: `ENTERPRIPHY_OUT` is the preferred override for the output directory; `GRAPHIFY_OUT` continues to work.
+- Skill files, slash commands (`/graphify`), output directory (`graphify-out/`) preserved unchanged this release. Phase 0.5 (next release) will introduce `/enterpriphy` as the primary command and migrate output dir to `enterpriphy-out/`.
+
+### Phase 1 — storage scaffolding (this release)
+
+- New module `enterpriphy/storage/` with Postgres manifest, MinIO blob store, Qdrant vector store, and outbox-pattern writers (skeletons; full integration follows in P3).
+- New optional extras in `pyproject.toml`: `[storage]`, `[orchestration]`, `[parsing]`, `[embeddings]`, `[enterpriphy]` (umbrella).
+- `docker-compose.yml` brings up the full local stack (Postgres, Redis, MinIO, Qdrant, Neo4j with GDS, TEI for BGE-M3 embeddings).
+- Initial Alembic migration `001_manifest.py` defines `documents`, `jobs`, `locks` tables.
+
+### Legacy `graphify` release notes follow
 
 ## 0.8.18 (2026-05-24)
 

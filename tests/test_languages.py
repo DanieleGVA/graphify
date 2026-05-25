@@ -2,7 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 import pytest
-from graphify.extract import (
+from enterpriphy.extract import (
     extract_java, extract_c, extract_cpp, extract_ruby,
     extract_csharp, extract_kotlin, extract_scala, extract_php,
     extract_swift, extract_go, extract_julia, extract_js, extract_fortran,
@@ -610,7 +610,7 @@ def test_swift_extension_across_files_merges_into_canonical_type():
     single Foo node. tree-sitter-swift parses both as `class_declaration` and
     node ids carry the file stem, so without a corpus-level merge each file
     would emit its own Foo."""
-    from graphify.extract import extract
+    from enterpriphy.extract import extract
     paths = sorted((FIXTURES / "swift_cross_file").glob("*.swift"))
     r = extract(paths, cache_root=Path("/tmp/graphify-test-no-cache"))
     foo_nodes = [n for n in r["nodes"] if n["label"] == "Foo"]
@@ -627,7 +627,7 @@ def test_swift_extension_across_files_merges_into_canonical_type():
 
 # ── Elixir ────────────────────────────────────────────────────────────────────
 
-from graphify.extract import extract_elixir
+from enterpriphy.extract import extract_elixir
 
 def test_elixir_finds_module():
     r = extract_elixir(FIXTURES / "sample.ex")
@@ -674,7 +674,7 @@ def test_elixir_method_edges():
 
 
 # ── Objective-C ──────────────────────────────────────────────────────────────
-from graphify.extract import extract_objc
+from enterpriphy.extract import extract_objc
 
 
 def test_objc_finds_interface():
@@ -952,7 +952,7 @@ def test_ts_static_template_literal_resolved():
 
 # ── Markdown ─────────────────────────────────────────────────────────────────
 
-from graphify.extract import extract_markdown
+from enterpriphy.extract import extract_markdown
 
 def test_markdown_no_error():
     r = extract_markdown(FIXTURES / "deploy_guide.md")

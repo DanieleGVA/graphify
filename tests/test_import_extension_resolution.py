@@ -10,7 +10,7 @@ so `build_from_json` dropped the edge as external.
 
 from pathlib import Path
 
-from graphify.extract import (
+from enterpriphy.extract import (
     _make_id,
     _resolve_js_module_path,
     extract_js,

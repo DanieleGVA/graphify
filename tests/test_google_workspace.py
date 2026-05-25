@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-import graphify.google_workspace as gw
+import enterpriphy.google_workspace as gw
 
 
 def test_read_google_shortcut_doc_id(tmp_path):

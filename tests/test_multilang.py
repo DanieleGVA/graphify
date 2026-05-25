@@ -3,7 +3,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 import pytest
-from graphify.extract import extract_js, extract_go, extract_rust, extract, extract_sql
+from enterpriphy.extract import extract_js, extract_go, extract_rust, extract, extract_sql
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -180,7 +180,7 @@ def test_rust_no_dangling_edges():
 def test_rust_no_cross_crate_spurious_edges():
     """Scoped calls (Type::method) and blocklisted names must not produce
     INFERRED cross-crate calls edges (#908)."""
-    from graphify.extract import extract
+    from enterpriphy.extract import extract
     crate_a = FIXTURES / "crate_a" / "src" / "lib.rs"
     crate_b = FIXTURES / "crate_b" / "src" / "lib.rs"
     r = extract([crate_a, crate_b])

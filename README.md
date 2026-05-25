@@ -1,3 +1,18 @@
+<h1 align="center">Enterpriphy</h1>
+
+<p align="center">
+  <em>Enterprise-scale, multi-modal, bi-temporal knowledge graph platform.</em><br>
+  <em>Evolution of <a href="https://github.com/safishamsi/graphify">graphify</a> (PyPI <code>graphifyy</code>) — see
+  <a href="./ARCHITECTURE_v2.md">ARCHITECTURE_v2.md</a> and
+  <a href="./MIGRATION_PLAN.md">MIGRATION_PLAN.md</a>.</em>
+</p>
+
+> **Status (v1.0.0-rc.0)**. Enterpriphy is the rebrand of `graphify` and the foundation of the v1 architecture: distributed storage (Postgres / MinIO / Qdrant / Neo4j), multi-modal ingestion with the LlamaParse two-tier router, and a bi-temporal property graph that distinguishes valid facts from facts that have been superseded. The legacy `/graphify` slash command, `graphify` CLI alias, and `graphify-out/` output directory remain functional during the migration window (see Phase 0 of the migration plan).
+
+<p align="center">
+  <em>— legacy README below —</em>
+</p>
+
 <p align="center">
   <a href="https://graphifylabs.ai"><img src="https://raw.githubusercontent.com/safishamsi/graphify/v4/docs/logo-text.svg" width="260" height="64" alt="Graphify"/></a>
 </p>

@@ -4,7 +4,7 @@ import subprocess
 from types import SimpleNamespace
 from pathlib import Path
 import pytest
-from graphify.hooks import install, uninstall, status, _hooks_dir, _HOOK_MARKER, _CHECKOUT_MARKER
+from enterpriphy.hooks import install, uninstall, status, _hooks_dir, _HOOK_MARKER, _CHECKOUT_MARKER
 
 
 def _make_git_repo(tmp_path: Path) -> Path:
@@ -157,7 +157,7 @@ def test_hooks_dir_accepts_absolute_git_hooks_path(tmp_path, monkeypatch):
 
 def test_hook_skips_head_on_exe():
     """Hook script must skip shebang extraction for .exe binaries (Windows)."""
-    from graphify.hooks import _PYTHON_DETECT
+    from enterpriphy.hooks import _PYTHON_DETECT
     assert "*.exe) _SHEBANG=" in _PYTHON_DETECT or '*.exe)' in _PYTHON_DETECT
 
 

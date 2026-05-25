@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from graphify.symbol_resolution import (
+from enterpriphy.symbol_resolution import (
     _bash_make_id,
     build_label_index,
     build_python_symbol_index,
@@ -516,7 +516,7 @@ def test_bash_call_resolver_skips_non_bash_raw_calls(tmp_path: Path) -> None:
 
 
 def test_bash_make_id_identical_to_make_id() -> None:
-    from graphify.extract import _make_id
+    from enterpriphy.extract import _make_id
 
     assert _bash_make_id("foo", "bar") == _make_id("foo", "bar")
     assert _bash_make_id("auth") == _make_id("auth")
@@ -531,7 +531,7 @@ def test_bash_make_id_unicode_matches_make_id() -> None:
     produces node IDs that match those from extract_bash.  The original local
     copy lacked NFKC normalisation, Unicode-aware regex, and casefold().
     """
-    from graphify.extract import _make_id
+    from enterpriphy.extract import _make_id
 
     # Accented letter: é is a Unicode word char that _make_id preserves
     assert _bash_make_id("café", "run") == _make_id("café", "run"), (
@@ -554,7 +554,7 @@ def test_parse_python_import_aliases_skips_function_local_imports(tmp_path):
     file-wide evidence — function-local imports are only valid in their
     lexical scope. Walking the whole AST would falsely justify unrelated
     calls in other scopes."""
-    from graphify.symbol_resolution import parse_python_import_aliases
+    from enterpriphy.symbol_resolution import parse_python_import_aliases
 
     py = tmp_path / "scoped.py"
     py.write_text(
@@ -573,7 +573,7 @@ def test_parse_python_import_aliases_skips_function_local_imports(tmp_path):
 
 def test_parse_python_import_aliases_accepts_top_level_import(tmp_path):
     """A module-level `from helper import transform` IS file-wide evidence."""
-    from graphify.symbol_resolution import parse_python_import_aliases
+    from enterpriphy.symbol_resolution import parse_python_import_aliases
 
     py = tmp_path / "toplevel.py"
     py.write_text("from helper import transform\n\ndef one():\n    return transform()\n")
@@ -586,7 +586,7 @@ def test_parse_python_import_aliases_accepts_top_level_import(tmp_path):
 def test_node_is_resolvable_symbol_requires_code_file_type():
     """Document/paper/image/concept nodes MUST NOT be indexed as call targets,
     even when their label looks like a callable identifier."""
-    from graphify.symbol_resolution import node_is_resolvable_symbol
+    from enterpriphy.symbol_resolution import node_is_resolvable_symbol
 
     code = {"id": "n1", "label": "helper", "file_type": "code"}
     doc = {"id": "n2", "label": "helper", "file_type": "document"}
@@ -604,7 +604,7 @@ def test_node_is_resolvable_symbol_requires_code_file_type():
 def test_build_label_index_excludes_non_code_nodes():
     """label index must not include document/paper/image nodes even when
     label and id are present and well-formed."""
-    from graphify.symbol_resolution import build_label_index
+    from enterpriphy.symbol_resolution import build_label_index
 
     nodes = [
         {"id": "code_one", "label": "helper", "file_type": "code"},
@@ -618,7 +618,7 @@ def test_build_label_index_excludes_non_code_nodes():
 # F3 — bash resolver defensive against malformed input
 def test_resolve_bash_source_edges_skips_malformed_source(tmp_path):
     """A `bash_sources` entry missing `target_path` must not raise KeyError."""
-    from graphify.symbol_resolution import resolve_bash_source_edges
+    from enterpriphy.symbol_resolution import resolve_bash_source_edges
 
     per_file = [
         {
@@ -639,7 +639,7 @@ def test_resolve_bash_source_edges_skips_malformed_source(tmp_path):
 
 def test_resolve_bash_source_edges_skips_bash_function_node_missing_id(tmp_path):
     """A node tagged as bash_function but missing `id` must not raise KeyError."""
-    from graphify.symbol_resolution import resolve_bash_source_edges
+    from enterpriphy.symbol_resolution import resolve_bash_source_edges
 
     per_file = [
         {
@@ -659,7 +659,7 @@ def test_resolve_bash_source_edges_skips_bash_function_node_missing_id(tmp_path)
 
 def test_resolve_bash_source_edges_skips_raw_call_missing_caller_nid(tmp_path):
     """A raw_call entry missing `caller_nid` must not raise KeyError."""
-    from graphify.symbol_resolution import resolve_bash_source_edges
+    from enterpriphy.symbol_resolution import resolve_bash_source_edges
 
     a = tmp_path / "a.sh"
     b = tmp_path / "b.sh"
@@ -688,7 +688,7 @@ def test_resolve_bash_source_edges_skips_raw_call_missing_caller_nid(tmp_path):
 
 def test_resolve_bash_source_edges_accepts_none_per_file_entries(tmp_path):
     """A None entry in per_file (e.g. failed extraction) must be silently skipped."""
-    from graphify.symbol_resolution import resolve_bash_source_edges
+    from enterpriphy.symbol_resolution import resolve_bash_source_edges
 
     a = tmp_path / "a.sh"
     a.write_text("# noop\n")
@@ -698,7 +698,7 @@ def test_resolve_bash_source_edges_accepts_none_per_file_entries(tmp_path):
 
 def test_resolve_bash_source_edges_skips_non_dict_lists(tmp_path):
     """Non-dict entries in bash_sources/raw_calls/nodes must be silently skipped."""
-    from graphify.symbol_resolution import resolve_bash_source_edges
+    from enterpriphy.symbol_resolution import resolve_bash_source_edges
 
     a = tmp_path / "a.sh"
     a.write_text("# noop\n")
@@ -717,7 +717,7 @@ def test_resolve_bash_source_edges_skips_non_dict_lists(tmp_path):
 def test_resolve_bash_source_edges_relative_path_resolves_against_source_dir(tmp_path):
     """`source ./helper.sh` from a/main.sh should resolve to a/helper.sh,
     not to ./helper.sh from the process CWD."""
-    from graphify.symbol_resolution import resolve_bash_source_edges
+    from enterpriphy.symbol_resolution import resolve_bash_source_edges
 
     sub = tmp_path / "scripts"
     sub.mkdir()
@@ -749,14 +749,14 @@ def test_resolve_bash_source_edges_relative_path_resolves_against_source_dir(tmp
 # F1 — malformed raw_calls in non-Bash resolvers
 def test_iter_raw_calls_skips_non_dict_per_file_entries():
     """A non-dict per_file entry (e.g. junk fragment) must be silently skipped."""
-    from graphify.symbol_resolution import iter_raw_calls
+    from enterpriphy.symbol_resolution import iter_raw_calls
 
     assert iter_raw_calls(["not a dict", None, 42]) == []
 
 
 def test_iter_raw_calls_skips_non_list_raw_calls():
     """`raw_calls` that isn't a list must yield empty."""
-    from graphify.symbol_resolution import iter_raw_calls
+    from enterpriphy.symbol_resolution import iter_raw_calls
 
     assert iter_raw_calls([{"raw_calls": "abc"}]) == []
     assert iter_raw_calls([{"raw_calls": None}]) == []
@@ -765,7 +765,7 @@ def test_iter_raw_calls_skips_non_list_raw_calls():
 
 def test_iter_raw_calls_drops_non_dict_items_in_list():
     """Items inside `raw_calls` list that aren't dicts must be dropped."""
-    from graphify.symbol_resolution import iter_raw_calls
+    from enterpriphy.symbol_resolution import iter_raw_calls
 
     out = iter_raw_calls([{"raw_calls": ["str", 42, None, {"callee": "real", "caller_nid": "c"}]}])
     assert out == [{"callee": "real", "caller_nid": "c"}]
@@ -773,7 +773,7 @@ def test_iter_raw_calls_drops_non_dict_items_in_list():
 
 def test_resolve_cross_file_raw_calls_survives_malformed_raw_calls():
     """The python cross-file resolver returns [] (not crash) on bad raw_calls."""
-    from graphify.symbol_resolution import resolve_cross_file_raw_calls
+    from enterpriphy.symbol_resolution import resolve_cross_file_raw_calls
 
     # raw_calls is a string instead of a list
     assert resolve_cross_file_raw_calls([{"raw_calls": "abc"}], [], []) == []
@@ -783,7 +783,7 @@ def test_resolve_cross_file_raw_calls_survives_malformed_raw_calls():
 
 def test_resolve_python_import_guided_calls_survives_malformed_raw_calls(tmp_path):
     """Python import-guided resolver also tolerates malformed raw_calls."""
-    from graphify.symbol_resolution import resolve_python_import_guided_calls
+    from enterpriphy.symbol_resolution import resolve_python_import_guided_calls
 
     py = tmp_path / "caller.py"
     py.write_text("from helper import transform\n")
@@ -806,7 +806,7 @@ def test_resolve_python_import_guided_calls_survives_malformed_raw_calls(tmp_pat
 def test_resolve_bash_source_edges_skips_unhashable_callee(tmp_path):
     """A bash raw_call with `callee: [list]` (unhashable for dict membership)
     must not raise TypeError — silently skip the call."""
-    from graphify.symbol_resolution import resolve_bash_source_edges
+    from enterpriphy.symbol_resolution import resolve_bash_source_edges
 
     a = tmp_path / "a.sh"
     b = tmp_path / "b.sh"
@@ -840,7 +840,7 @@ def test_resolve_bash_source_edges_skips_unhashable_callee(tmp_path):
 # malformed per_file slots and length mismatches.
 def test_resolve_python_import_guided_calls_non_dict_per_file_slot(tmp_path):
     """A non-dict per_file slot (e.g. a string) must not raise AttributeError."""
-    from graphify.symbol_resolution import resolve_python_import_guided_calls
+    from enterpriphy.symbol_resolution import resolve_python_import_guided_calls
 
     py = tmp_path / "caller.py"
     py.write_text("from helper import transform\n")
@@ -851,7 +851,7 @@ def test_resolve_python_import_guided_calls_non_dict_per_file_slot(tmp_path):
 
 def test_resolve_python_import_guided_calls_per_file_shorter_than_paths(tmp_path):
     """per_file shorter than paths must not raise IndexError."""
-    from graphify.symbol_resolution import resolve_python_import_guided_calls
+    from enterpriphy.symbol_resolution import resolve_python_import_guided_calls
 
     a = tmp_path / "a.py"
     b = tmp_path / "b.py"
@@ -864,7 +864,7 @@ def test_resolve_python_import_guided_calls_per_file_shorter_than_paths(tmp_path
 
 def test_resolve_python_import_guided_calls_per_file_none_slot(tmp_path):
     """A None per_file slot is treated as empty fragment (no crash, no edges)."""
-    from graphify.symbol_resolution import resolve_python_import_guided_calls
+    from enterpriphy.symbol_resolution import resolve_python_import_guided_calls
 
     py = tmp_path / "caller.py"
     py.write_text("from helper import transform\n")
@@ -940,7 +940,7 @@ def test_resolve_python_import_guided_calls_metadata_sanitizes_hostile_alias(
     `&lt;script&gt;` would not appear in `imported_name`, and the raw
     NUL byte would not be stripped from `module_stem`.
     """
-    import graphify.symbol_resolution as sr
+    import enterpriphy.symbol_resolution as sr
 
     caller = tmp_path / "caller.py"
     helper = tmp_path / "helper.py"

@@ -2,7 +2,7 @@
 
 import json
 
-from graphify import semantic_cleanup as sc
+from enterpriphy import semantic_cleanup as sc
 
 
 def _valid_fragment():
