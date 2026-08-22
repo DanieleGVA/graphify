@@ -147,19 +147,33 @@ Output exactly this schema:
 """
 
 
-def _read_files(paths: list[Path], root: Path) -> str:
-    """Return file contents formatted for the extraction prompt."""
+def _read_files(paths: list, root: Path) -> str:
+    """Return file contents formatted for the extraction prompt.
+
+    Accepts extraction *units*: a plain `Path` (whole file, upstream behaviour)
+    or a `graphify_ent.file_slice.PdfSlice` (a page range of one PDF). Slices
+    report their parent PDF in the `=== rel ===` header so nodes still merge by
+    source document. Without slices this is byte-identical to upstream except
+    that the per-file cap is `_FILE_CHAR_CAP` rather than a literal 20000.
+    """
+    from graphify_ent.file_slice import PdfSlice, read_slice_text, slice_unit_path
+
     parts: list[str] = []
-    for p in paths:
+    for unit in paths:
+        path = slice_unit_path(unit)
         try:
-            rel = p.relative_to(root)
+            rel = path.relative_to(root)
         except ValueError:
-            rel = p
-        try:
-            content = p.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+            rel = path
+        content = read_slice_text(unit)
+        if not content:
             continue
-        parts.append(f"=== {rel} ===\n{content[:20000]}")
+        if isinstance(unit, PdfSlice):
+            # Pages are dispatched in full; the cap governed the split already.
+            header = f"=== {rel} (pages {unit.page_start + 1}-{unit.page_end + 1}) ==="
+            parts.append(f"{header}\n{content}")
+        else:
+            parts.append(f"=== {rel} ===\n{content[:_FILE_CHAR_CAP]}")
     return "\n\n".join(parts)
 
 
@@ -596,6 +610,19 @@ def _estimate_file_tokens(path: Path) -> int:
     the `=== rel ===` separator. Returns 0 for unreadable paths so they don't
     blow up packing.
     """
+    from graphify_ent.file_slice import PdfSlice
+
+    if isinstance(path, PdfSlice):
+        # Slice length is known from slicing time; no re-open, no truncation.
+        chars = path.char_len + _PER_FILE_OVERHEAD_CHARS
+        if _TOKENIZER is None:
+            return chars // _CHARS_PER_TOKEN
+        from graphify_ent.file_slice import read_slice_text
+
+        return len(_TOKENIZER.encode(read_slice_text(path))) + (
+            _PER_FILE_OVERHEAD_CHARS // _CHARS_PER_TOKEN
+        )
+
     if _TOKENIZER is None:
         try:
             size = path.stat().st_size
@@ -628,9 +655,11 @@ def _pack_chunks_by_tokens(
     if token_budget <= 0:
         raise ValueError(f"token_budget must be positive, got {token_budget}")
 
-    by_dir: dict[Path, list[Path]] = {}
+    from graphify_ent.file_slice import slice_unit_path
+
+    by_dir: dict[Path, list] = {}
     for f in files:
-        by_dir.setdefault(f.parent, []).append(f)
+        by_dir.setdefault(slice_unit_path(f).parent, []).append(f)
 
     chunks: list[list[Path]] = []
     current: list[Path] = []
