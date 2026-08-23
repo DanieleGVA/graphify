@@ -23,7 +23,13 @@ __all__ = ["EmbedStats", "Embedder", "embed_graph"]
 
 DEFAULT_MODEL = "BAAI/bge-m3"
 DEFAULT_BATCH = 32
-EMBED_DIM = 1024
+#: Vector width. Overridable because it is a property of the chosen model, not
+#: of the system: BGE-m3 emits 1024, MiniLM-L12-v2 emits 384. The schema reads
+#: the same value, so the two cannot silently disagree.
+EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
+
+#: Characters of node text handed to the encoder (see `_node_text`).
+EMBED_TEXT_CHARS = 700
 
 
 @dataclass
@@ -73,10 +79,22 @@ class Embedder:
 
 
 def _node_text(record) -> str:
-    """What gets embedded: label + excerpt (architecture doc §3.1)."""
+    """What gets embedded: label + the widest real text the node carries.
+
+    `passage` (the paragraph the node's quote came from) is preferred over
+    `text_excerpt` when present. Measured, concept nodes hold ~32 characters of
+    excerpt, so embedding the excerpt described a node by a fragment like
+    "clarified butter" and the semantic channel could not tell one recipe from
+    another. The passage is the same claim with its sentence attached.
+    """
     label = record.get("label") or ""
-    excerpt = record.get("text_excerpt") or ""
-    return f"{label}\n{excerpt}".strip()[:2000]
+    body = record.get("passage") or record.get("text_excerpt") or ""
+    # Bounded on purpose. A page node's passage is its whole page, and
+    # embedding 3,600 characters of mixed content produces an averaged vector
+    # that matches everything weakly — besides stalling the encoder. The long
+    # passage exists for lexical search and for returning the evidence; the
+    # vector only has to place the node in the right neighbourhood.
+    return f"{label}\n{body}".strip()[:EMBED_TEXT_CHARS]
 
 
 def embed_graph(
@@ -97,7 +115,7 @@ def embed_graph(
             rows = list(
                 s.run(
                     "MATCH (n:Entity) WHERE n.embedding IS NULL "
-                    "RETURN n.id AS id, n.label AS label, n.text_excerpt AS text_excerpt "
+                    "RETURN n.id AS id, n.label AS label, n.text_excerpt AS text_excerpt, n.passage AS passage "
                     "LIMIT $k",
                     k=batch_size,
                 )

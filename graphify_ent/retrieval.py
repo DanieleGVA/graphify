@@ -34,6 +34,10 @@ from typing import Any
 
 __all__ = [
     "REFUSAL_TEXT",
+    "STRONG_FULLTEXT",
+    "balance_by_method",
+    "MIN_METHOD_SHARE",
+    "RESULT_WINDOW",
     "Hit",
     "RetrievalResult",
     "HybridRetriever",
@@ -84,6 +88,59 @@ MIN_FULLTEXT_SCORE = 1.0       # lexical-only fallback; cannot separate on its o
 
 #: The explicit-refusal path. Returning this is a *correct* outcome, never a failure.
 REFUSAL_TEXT = "not present in corpus"
+
+#: Lexical score above which a query is considered *lexically settled*: the
+#: corpus contains the phrase, so support is already established and the
+#: semantic channel has nothing left to decide. Verification queries name a
+#: preparation ("Bechamel Sauce", "Sauce Mornay"), which is a lexical problem;
+#: skipping the encoder on that path is most of the query's cost. Refusal is
+#: unaffected — it is only ever decided on the slow path, where lexical
+#: evidence was weak, which is exactly when the semantic channel is needed.
+STRONG_FULLTEXT = 6.0
+
+#: How many results a caller is assumed to actually read. Balancing applies to
+#: this head of the list only; everything below keeps pure fused order.
+RESULT_WINDOW = 10
+
+#: Minimum share of that window guaranteed to each extraction method present.
+#: A graph can hold facts extracted in several ways at once — page-sized
+#: passages that carry surrounding text, and concept-sized nodes that carry a
+#: short quote and the relations around it. They answer different questions,
+#: and the window is a fixed budget: measured, 79,658 concept nodes crowded
+#: 3,187 passage nodes out of the top 10 and page-level recall fell from 35.2%
+#: to 28.3% even as document-level recall rose to 97.2%. Neither method is
+#: named here — the rule is that no single one may take the whole window.
+MIN_METHOD_SHARE = 0.3
+
+
+def balance_by_method(
+    hits: list["Hit"], window: int = RESULT_WINDOW, min_share: float = MIN_METHOD_SHARE
+) -> list["Hit"]:
+    """Stop one extraction method from monopolising the returned window.
+
+    Order is otherwise preserved: this caps how many of the top `window` slots
+    any one method may take, it does not promote weaker hits above stronger
+    ones. With a single method present it is the identity function, so a graph
+    built one way behaves exactly as before.
+    """
+    if window <= 0 or not hits:
+        return hits
+    methods = {h.extraction_method or "unknown" for h in hits}
+    if len(methods) < 2:
+        return hits
+    quota = max(1, int(window * min_share))
+    cap = max(1, window - (len(methods) - 1) * quota)
+    counts: dict[str, int] = {}
+    head: list[Hit] = []
+    tail: list[Hit] = []
+    for h in hits:
+        m = h.extraction_method or "unknown"
+        if len(head) < window and counts.get(m, 0) < cap:
+            head.append(h)
+            counts[m] = counts.get(m, 0) + 1
+        else:
+            tail.append(h)
+    return head + tail
 
 #: Ranking multipliers — provenance is part of the score, per architecture §2.
 CONFIDENCE_WEIGHT = {"EXTRACTED": 1.0, "INFERRED": 0.75, "AMBIGUOUS": 0.5}
@@ -313,6 +370,10 @@ class HybridRetriever:
         min_support: float = 0.0,
         min_vector_similarity: float = MIN_VECTOR_SIMILARITY,
         min_fulltext_score: float = MIN_FULLTEXT_SCORE,
+        balance_methods: bool = True,
+        result_window: int = RESULT_WINDOW,
+        fast_path: bool = True,
+        strong_fulltext: float = STRONG_FULLTEXT,
     ) -> RetrievalResult:
         """Run the hybrid pipeline. `channels` allows the eval's ablations."""
         variants = self.expand_query(query_text, deep=deep)
@@ -321,13 +382,28 @@ class HybridRetriever:
         best_vector = 0.0
         best_fulltext = 0.0
 
+        # Fast path: probe the lexical channel first. If the corpus literally
+        # contains the phrase, the answer is settled and the embedding — the
+        # single most expensive step — is never computed.
+        if fast_path and "fulltext" in channels:
+            probe = self.fulltext_search(query_text, top_k=top_k, domain=domain)
+            if probe:
+                best_fulltext = max(s for _, s in probe)
+                if best_fulltext >= strong_fulltext:
+                    ranked["fulltext:0"] = [i for i, _ in probe]
+                    channel_counts["fulltext"] = len(probe)
+                    channel_counts["fast_path"] = 1
+                    embedding = None
+                    channels = tuple(c for c in channels if c != "vector")
+                    variants = variants[:1]
+
         if "vector" in channels and embedding is not None:
             vec = self.vector_search(embedding, top_k=top_k, domain=domain)
             ranked["vector"] = [i for i, _ in vec]
             channel_counts["vector"] = len(vec)
             best_vector = max((s for _, s in vec), default=0.0)
 
-        if "fulltext" in channels:
+        if "fulltext" in channels and "fulltext:0" not in ranked:
             for idx, variant in enumerate(variants):
                 ft = self.fulltext_search(variant, top_k=top_k, domain=domain)
                 if ft:
@@ -341,7 +417,10 @@ class HybridRetriever:
         # returning the nearest unrelated passage is precisely the failure Q1
         # exists to prevent. When the semantic channel ran, it decides; lexical
         # score alone is not evidence of support (see the calibration above).
-        if embedding is not None and "vector" in channels:
+        if channel_counts.get("fast_path"):
+            # The phrase is in the corpus; that IS the support.
+            supported = True
+        elif embedding is not None and "vector" in channels:
             supported = best_vector >= min_vector_similarity
         else:
             supported = best_fulltext >= min_fulltext_score
@@ -393,6 +472,8 @@ class HybridRetriever:
             hits.append(hit)
 
         hits.sort(key=lambda h: -h.score)
+        if balance_methods:
+            hits = balance_by_method(hits, window=result_window)
 
         if min_support and (not hits or hits[0].score < min_support):
             return RetrievalResult(

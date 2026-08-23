@@ -200,6 +200,11 @@ class Neo4jLoader:
     def apply_schema(self, path: Path | None = None) -> list[str]:
         """Apply every statement in schema.cypher; safe to run repeatedly."""
         text = Path(path or _SCHEMA_PATH).read_text(encoding="utf-8")
+        # The vector width belongs to the embedding model; keeping it literal in
+        # the schema meant a model swap left an index of the wrong shape behind.
+        dim = os.environ.get("EMBED_DIM")
+        if dim:
+            text = re.sub(r"(`vector\.dimensions`\s*:\s*)\d+", r"\g<1>" + str(int(dim)), text)
         statements = [
             s.strip()
             for s in re.sub(r"^\s*//.*$", "", text, flags=re.MULTILINE).split(";")

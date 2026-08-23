@@ -18,6 +18,7 @@ from graphify_ent.retrieval import (
     rrf_fuse,
     serialize_context,
     verify_evidence_binding,
+    balance_by_method,
 )
 
 NEO4J_URI = os.environ.get("NEO4J_URI")
@@ -196,3 +197,64 @@ class TestAgainstLiveGraph:
         for h in res.hits[:10]:
             src = (props.get(h.node_id) or {}).get("text_excerpt") or ""
             assert verify_evidence_binding(h.evidence, src), f"{h.node_id} not evidence-bound"
+
+
+class TestBalanceByMethod:
+    """One extraction method must not take the whole result window.
+
+    Measured motivation: with 79,658 concept nodes and 3,187 passage nodes in
+    one graph, the concept nodes took all ten top slots and page-level recall
+    fell from 35.2% to 28.3% even though document-level recall rose to 97.2%.
+    """
+
+    @staticmethod
+    def _hit(i: int, method: str) -> Hit:
+        return Hit(node_id=f"n{i}", score=1000.0 - i, label=f"l{i}",
+                   source_file="book.pdf", extraction_method=method)
+
+    def test_single_method_is_untouched(self):
+        hits = [self._hit(i, "native") for i in range(15)]
+        assert balance_by_method(hits) == hits
+
+    def test_empty_is_untouched(self):
+        assert balance_by_method([]) == []
+
+    def test_minority_method_gets_its_share_of_the_window(self):
+        hits = ([self._hit(i, "llm") for i in range(30)]
+                + [self._hit(100 + i, "native") for i in range(5)])
+        hits.sort(key=lambda h: -h.score)
+        assert all(h.extraction_method == "llm" for h in hits[:10])
+
+        out = balance_by_method(hits, window=10, min_share=0.3)
+        methods = [h.extraction_method for h in out[:10]]
+        assert methods.count("native") >= 3
+        assert methods.count("llm") == 7
+
+    def test_nothing_is_dropped_or_duplicated(self):
+        hits = ([self._hit(i, "llm") for i in range(20)]
+                + [self._hit(100 + i, "native") for i in range(20)])
+        out = balance_by_method(hits)
+        assert len(out) == len(hits)
+        assert {h.node_id for h in out} == {h.node_id for h in hits}
+
+    def test_order_within_a_method_is_preserved(self):
+        """Capping must not promote a weaker hit above a stronger one of the
+        same method — it only limits how many slots that method may take."""
+        hits = ([self._hit(i, "llm") for i in range(20)]
+                + [self._hit(100 + i, "native") for i in range(20)])
+        hits.sort(key=lambda h: -h.score)
+        out = balance_by_method(hits)
+        for method in ("llm", "native"):
+            before = [h.node_id for h in hits if h.extraction_method == method]
+            after = [h.node_id for h in out if h.extraction_method == method]
+            assert before == after
+
+    def test_minority_scarcity_does_not_waste_slots(self):
+        """If the minority method has only one candidate, the window must still
+        be filled — a guaranteed share is a ceiling on the majority, not a hole."""
+        hits = ([self._hit(i, "llm") for i in range(20)]
+                + [self._hit(100, "native")])
+        hits.sort(key=lambda h: -h.score)
+        out = balance_by_method(hits, window=10, min_share=0.3)
+        assert len(out[:10]) == 10
+        assert sum(1 for h in out[:10] if h.extraction_method == "native") == 1

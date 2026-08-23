@@ -11,8 +11,13 @@ CREATE CONSTRAINT concept_id IF NOT EXISTS
   FOR (c:Concept) REQUIRE c.id IS UNIQUE;
 
 // --- Search indexes --------------------------------------------------------
+// `passage` is indexed alongside the short fields: without it lexical search
+// sees only a node's label and its ~32-character quote, so an exact phrase from
+// the source ("sifted flour") cannot reach the page that states it. Measured,
+// that is why a documentary check returned a plausible neighbouring page
+// instead of the recipe itself.
 CREATE FULLTEXT INDEX entity_text IF NOT EXISTS
-  FOR (n:Entity) ON EACH [n.label, n.text_excerpt];
+  FOR (n:Entity) ON EACH [n.label, n.text_excerpt, n.passage];
 
 CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
   FOR (n:Entity) ON (n.embedding)
