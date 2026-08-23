@@ -49,8 +49,13 @@ _print_lock = threading.Lock()
 _ckpt_lock = threading.Lock()
 
 
-def norm(s: str) -> str:
-    return re.sub(r"\s+", " ", s or "").strip().lower()
+def norm(s) -> str:
+    """Whitespace-normalise. Tolerates the model returning a list for a field
+    the schema declares as a string — measured once in 767 slices, and losing a
+    whole slice to it would be a worse failure than joining the parts."""
+    if isinstance(s, (list, tuple)):
+        s = " ".join(str(x) for x in s)
+    return re.sub(r"\s+", " ", str(s or "")).strip().lower()
 
 
 def slug(name: str, n: int = 22) -> str:
@@ -96,6 +101,9 @@ def do_slice(task: dict, model: str, timeout: int) -> dict:
     kept, idmap, by_id = [], {}, {}
     for n in nodes:
         ev = n.get("evidence") or ""
+        if isinstance(ev, (list, tuple)):
+            ev = " ".join(str(x) for x in ev)
+            n["evidence"] = ev
         if not norm(ev) or norm(ev) not in src:       # fail-closed at ingest
             continue
         raw = str(n.get("id") or "").strip().lower()
