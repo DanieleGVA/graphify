@@ -28,10 +28,12 @@ CHAR_CAP = 20_000
 # Per-million-token prices as declared in graphify/llm.py BACKENDS.
 PRICING = {
     "claude-cli": {"input": 3.0, "output": 15.0, "note": "billed to the Claude plan"},
-    "deepseek-v4-flash": {"input": 0.14, "output": 0.28, "note": "via ollama cloud"},
-    "qwen3": {"input": 0.0, "output": 0.0, "note": "local"},
-    "gemma3": {"input": 0.0, "output": 0.0, "note": "local"},
+    "deepseek-v4-flash": {"input": 0.14, "output": 0.28, "note": "graphify BACKENDS"},
+    "kimi-k2.6": {"input": 0.74, "output": 4.66, "note": "graphify BACKENDS"},
 }
+#: Models whose price this repo cannot verify. Cost is reported as None rather
+#: than 0.0 — a silent zero would read as "free" and skew every comparison.
+UNKNOWN_PRICE = object()
 
 
 def norm(s: str) -> str:
@@ -97,8 +99,8 @@ def run_ollama(model: str, prompt: str, timeout: int, compact: bool = True) -> t
         parsed_compact = {"nodes": n, "edges": e}
     out_tok = env.get("eval_count", 0)
     base = model.split(":")[0]
-    price = PRICING.get(base, {"input": 0.0, "output": 0.0})
-    cost = in_tok / 1e6 * price["input"] + out_tok / 1e6 * price["output"]
+    price = PRICING.get(base)
+    cost = (in_tok / 1e6 * price["input"] + out_tok / 1e6 * price["output"]) if price else None
     result = parsed_compact if compact else parse_json_blob(content)
     return result, {"cost_usd": cost, "in_tokens": in_tok, "out_tokens": out_tok,
                     "truncated": env.get("done_reason") == "length"}
@@ -162,7 +164,8 @@ def main() -> int:
             continue
         wall = time.perf_counter() - t0
         ev = evaluate(parsed, text)
-        cpv = meta["cost_usd"] / ev["nodes_verified"] if ev["nodes_verified"] else None
+        cpv = (meta["cost_usd"] / ev["nodes_verified"]
+               if meta.get("cost_usd") is not None and ev["nodes_verified"] else None)
         results[backend] = {
             **ev, **{k: (round(v, 5) if isinstance(v, float) else v)
                      for k, v in meta.items()},
@@ -175,8 +178,9 @@ def main() -> int:
               f"senza citazione {r['no_evidence']}")
         print(f"  archi {r['edges_kept']} ({r['relation_types']} tipi), "
               f"label_en {r['label_en_pct']}%")
-        print(f"  ${r['cost_usd']} in {r['wall_s']}s -> "
-              f"${r['cost_per_verified_node_usd']}/nodo verificato\n")
+        cost_str = f"${r['cost_usd']}" if r.get("cost_usd") is not None else "prezzo ignoto"
+        print(f"  {cost_str} in {r['wall_s']}s, output {r.get('out_tokens')} token, "
+              f"troncato={r.get('truncated')}\n")
 
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
