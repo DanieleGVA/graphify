@@ -52,11 +52,24 @@ Output EXACTLY this shape and nothing else:
  "n":[["id","label","label_en","lang","pageStart-pageEnd","verbatim evidence"]],
  "e":[["source_id","target_id","relation","E"]]}
 
-Rules: ids are lowercase [a-z0-9_]; relations are one of calls, implements,
-references, cites, conceptually_related_to, shares_data_with,
-semantically_similar_to; state the source file once in "f", never per row;
-emit no null fields and no keys beyond f, n, e. Be exhaustive but concise:
-prefer more nodes over longer text per node."""
+Relation types — choose the MOST SPECIFIC one that applies. "references" is
+the fallback of last resort; an extraction where most edges are "references"
+carries almost no information and is a failed extraction.
+  variant_of               A is a variation or derivative of B
+  requires                 A needs B as a component, input or precondition
+  precedes                 A must happen before B in a sequence
+  part_of                  A is a constituent of the larger B
+  cites                    A explicitly names or quotes B as a source
+  conceptually_related_to  A and B belong to the same idea or family
+  shares_data_with         A and B share a component or input
+  semantically_similar_to  A and B are near-equivalents
+  implements               A is a concrete realisation of the general B
+  calls                    A invokes or depends on executing B
+  references               generic mention, when none of the above fits
+
+Rules: ids are lowercase [a-z0-9_]; state the source file once in "f", never
+per row; emit no null fields and no keys beyond f, n, e. Be exhaustive but
+concise: prefer more nodes over longer text per node."""
 
 
 def parse_compact(raw: str | dict, default_source: str = "") -> tuple[list[dict], list[dict]]:
