@@ -161,8 +161,20 @@ class TestAgainstLiveGraph:
         assert res.hits == []
 
     def test_in_corpus_query_is_not_refused(self, retriever):
-        """The floor must not suppress genuine answers."""
+        """The floor must not suppress genuine answers.
+
+        Precondition: the corpus must be fully embedded. A partially-embedded
+        database legitimately has no high-similarity node yet, which would make
+        this fail for a reason that has nothing to do with the floor.
+        """
         from graphify_ent.embed import Embedder
+
+        with retriever.loader._session() as s:
+            pending = s.run(
+                "MATCH (n:Entity) WHERE n.embedding IS NULL RETURN count(n) AS c"
+            ).single()["c"]
+        if pending:
+            pytest.skip(f"corpus not fully embedded ({pending} nodes pending)")
 
         q = "how to prepare a classic sauce"
         try:

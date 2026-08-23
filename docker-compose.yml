@@ -1,0 +1,171 @@
+# ENTERPRIPHY v1.0 — portable stack (ADR-0001).
+# Every AWS-managed component in the architecture doc is replaced by a container
+# here; worker code reads every endpoint from an env var, so moving back to a
+# managed service is a configuration change, not a code change.
+#
+#   SQS        -> RabbitMQ (quorum queues, DLX after 3 attempts)
+#   Fargate    -> worker replicas (docker compose up --scale worker=N)
+#   DynamoDB   -> PostgreSQL (chunk_id, status, attempt, cost)
+#   S3         -> MinIO (S3-compatible API)
+#   Bedrock    -> Anthropic API direct (LLM_ENDPOINT)
+#   Textract   -> Tesseract (in the worker image)
+#   Cohere     -> BGE-m3 local (1024-d, unchanged vector dimension)
+#   Entra ID   -> Keycloak (OIDC)
+#   CloudWatch -> Prometheus + Grafana + Loki
+#
+# Ports are offset (+1 on the last digit or +1000) so this stack can run beside
+# an existing local stack without colliding.
+
+name: enterpriphy-ent
+
+services:
+  neo4j:
+    image: neo4j:5
+    container_name: entf-neo4j
+    ports: ["7688:7687", "7475:7474"]
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:-enterpriphy}
+      NEO4J_server_memory_heap_max__size: 2G
+      NEO4J_server_memory_pagecache_size: 1G
+    volumes: ["neo4j-data:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7474 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: entf-rabbitmq
+    ports: ["5673:5672", "15673:15672"]
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-entf}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-enterpriphy}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio
+    container_name: entf-minio
+    command: server /data --console-address ":9001"
+    ports: ["9100:9000", "9101:9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-entfadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-enterpriphy}
+    volumes: ["minio-data:/data"]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: postgres:16
+    container_name: entf-postgres
+    ports: ["5434:5432"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-entf}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enterpriphy}
+      POSTGRES_DB: ${POSTGRES_DB:-entf_state}
+    volumes:
+      - "postgres-data:/var/lib/postgresql/data"
+      - "./infra/postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-entf}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: entf-keycloak
+    command: ["start-dev", "--import-realm"]
+    ports: ["8081:8080"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-enterpriphy}
+    volumes: ["./infra/keycloak-realm.json:/opt/keycloak/data/import/realm.json:ro"]
+
+  prometheus:
+    image: prom/prometheus
+    container_name: entf-prometheus
+    ports: ["9091:9090"]
+    volumes: ["./infra/prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: entf-loki
+    ports: ["3101:3100"]
+
+  grafana:
+    image: grafana/grafana
+    container_name: entf-grafana
+    ports: ["3001:3000"]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-enterpriphy}
+    volumes: ["./infra/grafana-dashboards:/var/lib/grafana/dashboards:ro"]
+    depends_on: [prometheus, loki]
+
+  presidio:
+    image: mcr.microsoft.com/presidio-analyzer:latest
+    container_name: entf-presidio
+    ports: ["5002:3000"]
+
+  retrieval:
+    build: {context: ., dockerfile: infra/Dockerfile}
+    container_name: entf-retrieval
+    command: ["python", "-m", "graphify_ent.server.app"]
+    ports: ["8100:8100"]
+    environment:
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-enterpriphy}
+      OIDC_ISSUER: http://keycloak:8080/realms/enterpriphy
+      RETRIEVAL_BEARER_TOKEN: ${RETRIEVAL_BEARER_TOKEN:-}
+      HOST: 0.0.0.0
+      PORT: "8100"
+    depends_on:
+      neo4j: {condition: service_healthy}
+
+  worker:
+    build: {context: ., dockerfile: infra/Dockerfile}
+    command: ["python", "-m", "graphify_ent.worker"]
+    environment:
+      # Every external endpoint is an env var — this is the ADR-0001 seam.
+      QUEUE_URL: amqp://${RABBITMQ_USER:-entf}:${RABBITMQ_PASSWORD:-enterpriphy}@rabbitmq:5672/
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      OBJECT_STORE_ACCESS_KEY: ${MINIO_ACCESS_KEY:-entfadmin}
+      OBJECT_STORE_SECRET_KEY: ${MINIO_SECRET_KEY:-enterpriphy}
+      STATE_DB_URL: postgresql://${POSTGRES_USER:-entf}:${POSTGRES_PASSWORD:-enterpriphy}@postgres:5432/${POSTGRES_DB:-entf_state}
+      LLM_ENDPOINT: ${LLM_ENDPOINT:-https://api.anthropic.com}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-enterpriphy}
+      MAX_SPEND_USD: ${MAX_SPEND_USD:-50}
+      PRESIDIO_URL: http://presidio:3000
+    depends_on:
+      rabbitmq: {condition: service_healthy}
+      minio: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    deploy:
+      replicas: 2
+
+  finalizer:
+    build: {context: ., dockerfile: infra/Dockerfile}
+    command: ["python", "-m", "graphify_ent.finalizer"]
+    environment:
+      STATE_DB_URL: postgresql://${POSTGRES_USER:-entf}:${POSTGRES_PASSWORD:-enterpriphy}@postgres:5432/${POSTGRES_DB:-entf_state}
+      OBJECT_STORE_ENDPOINT: http://minio:9000
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-enterpriphy}
+    depends_on:
+      postgres: {condition: service_healthy}
+      neo4j: {condition: service_healthy}
+
+volumes:
+  neo4j-data:
+  minio-data:
+  postgres-data:

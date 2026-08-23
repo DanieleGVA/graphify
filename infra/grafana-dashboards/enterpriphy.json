@@ -1,0 +1,20 @@
+{
+  "title": "ENTERPRIPHY — retrieval & ingestion",
+  "uid": "enterpriphy-main",
+  "panels": [
+    {"type": "timeseries", "title": "Query latency (p50/p95/p99)",
+     "targets": [{"expr": "histogram_quantile(0.95, sum(rate(retrieval_query_duration_seconds_bucket[5m])) by (le))"}]},
+    {"type": "timeseries", "title": "Retrieval stage hit counts",
+     "targets": [{"expr": "sum(rate(retrieval_channel_hits_total[5m])) by (channel)"}]},
+    {"type": "stat", "title": "Refusal rate (explicit 'not present in corpus')",
+     "targets": [{"expr": "sum(rate(retrieval_refusals_total[15m])) / sum(rate(retrieval_queries_total[15m]))"}]},
+    {"type": "timeseries", "title": "Neo4j driver pool",
+     "targets": [{"expr": "neo4j_pool_in_use"}]},
+    {"type": "timeseries", "title": "Extraction chunks/s",
+     "targets": [{"expr": "sum(rate(worker_chunks_total[5m]))"}]},
+    {"type": "stat", "title": "$ per run",
+     "targets": [{"expr": "sum(worker_run_cost_usd)"}]},
+    {"type": "stat", "title": "Semantic cache hit rate",
+     "targets": [{"expr": "sum(rate(worker_cache_hits_total[15m])) / sum(rate(worker_cache_lookups_total[15m]))"}]}
+  ]
+}
