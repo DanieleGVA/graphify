@@ -258,3 +258,33 @@ class TestBalanceByMethod:
         out = balance_by_method(hits, window=10, min_share=0.3)
         assert len(out[:10]) == 10
         assert sum(1 for h in out[:10] if h.extraction_method == "native") == 1
+
+
+class TestLexicalSupport:
+    """Lexical evidence means a passage containing most of the query, not a
+    high BM25 score.
+
+    Measured regression: "employee stock option vesting schedule" matched
+    "stock" — the broth, not the share — scored above the floor, and was
+    answered instead of refused. Coverage is what separates the two.
+    """
+
+    def test_coverage_floor_is_a_fraction_of_the_query(self):
+        from graphify_ent.retrieval import MIN_TERM_COVERAGE
+        assert 0.0 < MIN_TERM_COVERAGE <= 1.0
+
+    def test_required_terms_query_is_a_conjunction(self):
+        q = HybridRetriever._lucene_all("Mornay Sauce Gruyere")
+        assert q.count("+") == 3
+        assert "mornay" in q.lower()
+
+    def test_short_words_do_not_become_requirements(self):
+        """"and", "of" carry no information and would only narrow wrongly."""
+        q = HybridRetriever._lucene_all("roux and flour")
+        assert "+and" not in q.lower()
+
+    def test_hydrate_factor_covers_more_than_the_window(self):
+        """Provenance weighting reorders hits, so hydrating exactly the window
+        would drop candidates that were about to be promoted into it."""
+        from graphify_ent.retrieval import HYDRATE_FACTOR
+        assert HYDRATE_FACTOR >= 2

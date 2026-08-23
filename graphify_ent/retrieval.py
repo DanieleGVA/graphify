@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 __all__ = [
     "REFUSAL_TEXT",
@@ -55,35 +55,30 @@ DEFAULT_TOKEN_BUDGET = 4_000
 # carry no notion of "relevant at all", so the refusal decision is made on the
 # channels' own score semantics *before* fusion.
 #
-# Calibrated on the pilot (evidence/T32/refusal-calibration.json), not guessed:
+# Re-measured on the current corpus and encoder
+# (evidence/T73/refusal-calibration.json). The floor is a property of BOTH, and
+# carrying over a number calibrated for a different model is how a system stops
+# refusing without anyone noticing:
 #
-# Measured over the whole golden set (86 answerable, 3 unanswerable):
+#   in corpus      min 0.736   p5 0.760   median 0.825   max 0.893   (n=34)
+#   out of corpus  min 0.560              median 0.622   max 0.660   (n=20)
 #
-#   vector best-score   answerable: min 0.687, p5 0.708, p25 0.735, median 0.769
-#                       unanswerable: 0.693, 0.704, 0.712
-#   fulltext best-score answerable 5.22–9.82, unanswerable 0.0–6.31
+#     floor   out-of-corpus refused   in-corpus lost
+#     0.60    6/20                    0/34
+#     0.65    18/20                   0/34
+#     0.70    20/20                   0/34   <- chosen, sits in the gap
+#     0.75    20/20                   1/34
 #
-# Two findings drive the design:
+# The bands SEPARATE here, which they did not on the six-book corpus under
+# BGE-m3 (there they overlapped, and full refusal coverage cost 56% of recall).
+# Two things changed: MiniLM discriminates better on this material, and a single
+# coherent document has no near-neighbour for an unrelated question. 0.70 sits
+# in the gap with margin on both sides rather than on either boundary.
 #
-# 1. BM25 cannot arbitrate support at all — an out-of-corpus query ("employee
-#    stock option vesting schedule") scores 6.31 by matching ordinary English
-#    words, above a genuine in-corpus query ("aubergine", 5.22). The *semantic*
-#    channel is therefore the arbiter whenever an embedding is available; the
-#    lexical floor applies only to lexical-only operation and is explicitly the
-#    weaker guarantee.
-# 2. The vector bands **overlap**: no threshold both answers everything
-#    answerable and refuses everything unanswerable. The floor is a policy
-#    choice, measured:
-#
-#      floor   unanswerable refused   answerable lost
-#      0.70    1/3                    3/86
-#      0.72    3/3                    6/86   <- chosen
-#      0.75    3/3                    29/86
-#
-# Q1 is the hard gate (blueprint §3): never answering without support outranks
-# recall, so 0.72 is the operating point — full refusal coverage at a 7 % recall
-# cost, rather than 34 % at 0.75.
-MIN_VECTOR_SIMILARITY = 0.72
+# BM25 still cannot arbitrate support: an out-of-corpus query scores high on a
+# rare word precisely BECAUSE it is rare. The lexical channel establishes
+# support only when a single node contains EVERY term of the query.
+MIN_VECTOR_SIMILARITY = 0.70
 MIN_FULLTEXT_SCORE = 1.0       # lexical-only fallback; cannot separate on its own
 
 #: The explicit-refusal path. Returning this is a *correct* outcome, never a failure.
@@ -97,6 +92,35 @@ REFUSAL_TEXT = "not present in corpus"
 #: unaffected — it is only ever decided on the slow path, where lexical
 #: evidence was weak, which is exactly when the semantic channel is needed.
 STRONG_FULLTEXT = 6.0
+
+#: Fraction of a query's terms one passage must contain before it counts as
+#: lexical evidence. See the measurement in `_lexical_evidence`.
+MIN_TERM_COVERAGE = 0.6
+
+#: How many times the result window is hydrated. Provenance weighting can
+#: reorder hits, so the window's worth of candidates is not enough on its own;
+#: three times it is, and still a fraction of a large fused set.
+HYDRATE_FACTOR = 3
+
+#: Function words carry no evidence. Counting them toward coverage makes the
+#: threshold easier to clear precisely because they appear everywhere, which
+#: weakens the guard they are measured against; requiring them narrows on
+#: nothing. Three languages, because the corpus can hold three.
+_FUNCTION_WORDS = frozenset("""
+and the for with from that this into out are was were has have had not but
+les des une aux par sur dans pour avec est sont ont été plus
+del della delle degli con per una sono stato come anche
+""".split())
+
+#: Coverage at which a query counts as settled by one passage, so graph
+#: expansion is skipped. Above this the neighbours are noise, and the hop is
+#: pure latency on the path that runs most often.
+SETTLED_COVERAGE = 0.85
+
+#: How many lexical candidates are scanned for term coverage. Bounded because
+#: the scan is a string search per candidate: unbounded, it ran over every OR
+#: match in the corpus and cost more than it saved.
+LEXICAL_PROBE = 60
 
 #: How many results a caller is assumed to actually read. Balancing applies to
 #: this head of the list only; everything below keeps pure fused order.
@@ -263,6 +287,8 @@ class HybridRetriever:
         #: language-variant glossary; Phase 6.0 auto-builds this from the
         #: `:Concept` layer's per-language `labels` dict.
         self.glossary = glossary or {}
+        #: term -> does this corpus contain it. See `_known_terms`.
+        self._vocab: dict[tuple[str, str | None], int] = {}
 
     # -- tier (a): deterministic expansion ---------------------------------
     def expand_query(self, query: str, deep: bool = False) -> list[str]:
@@ -293,11 +319,90 @@ class HybridRetriever:
             + " RETURN node.id AS id, score ORDER BY score DESC"
         )
         with self.loader._session() as s:
-            return [(r["id"], r["score"]) for r in s.run(cypher, k=top_k, v=embedding,
-                                                         domain=domain)]
+            try:
+                return [(r["id"], r["score"]) for r in s.run(cypher, k=top_k, v=embedding,
+                                                             domain=domain)]
+            except Exception as exc:
+                # A width mismatch between the encoder and the index is a
+                # misconfiguration, not a query failure: say so plainly rather
+                # than surface a Java stack trace from three layers down.
+                if "dimensions" in str(exc):
+                    raise RuntimeError(
+                        f"embedding width {len(embedding)} does not match the vector "
+                        f"index; set EMBED_MODEL/EMBED_DIM consistently, or rebuild "
+                        f"the index after changing model ({exc})") from exc
+                raise
+
+    def _lexical_evidence(self, query_text: str, domain: str | None, top_k: int,
+                          must: str = "") -> tuple[list[tuple[str, float]], float]:
+        """Candidates that literally contain most of the query, and how much.
+
+        One round trip. The term counting happens in the database, so what
+        crosses the wire is a number per candidate rather than forty passages —
+        measured, shipping the passages back to count them in Python was the
+        largest remaining cost in a query.
+
+        Coverage, not score, is what establishes lexical support. A BM25 score
+        is high for a rare word precisely BECAUSE it is rare: "employee stock
+        option vesting schedule" matched "stock" — the broth — and was answered
+        instead of refused. One passage containing most of what was asked is
+        evidence; one passage containing one word of it is not.
+        """
+        terms = sorted({w.lower() for w in re.findall(r"[\w\u00c0-\u017f]{3,}", query_text)}
+                       - _FUNCTION_WORDS)
+        if not terms:
+            return [], 0.0
+        anchors = sorted({w.lower() for w in re.findall(r"[\w\u00c0-\u017f]{3,}", must)}
+                         - _FUNCTION_WORDS)
+        cypher = (
+            # Cut to the best candidates BEFORE the text scan. Without this the
+            # CONTAINS ran over every OR match in the corpus and the "one round
+            # trip" version came out slower than the two-query one it replaced.
+            "CALL db.index.fulltext.queryNodes('entity_text', $q) YIELD node, score "
+            "WITH node, score ORDER BY score DESC LIMIT $probe "
+            "WHERE ($domain IS NULL OR node.domain = $domain) "
+            + self._validity_clause("node") +
+            " WITH node, score, toLower(coalesce(node.passage,'') + ' ' + "
+            "coalesce(node.label,'') + ' ' + coalesce(node.text_excerpt,'')) AS body "
+            "WITH node, score, body, "
+            "size([t IN $terms WHERE body CONTAINS t]) AS hits, "
+            "size([a IN $anchors WHERE body CONTAINS a]) AS anchored "
+            "WHERE anchored = size($anchors) "
+            "RETURN node.id AS id, score, hits ORDER BY hits DESC, score DESC LIMIT $k")
+        with self.loader._session() as s:
+            try:
+                rows = list(s.run(cypher, q=_escape_lucene(query_text), domain=domain,
+                                  terms=terms, anchors=anchors, k=max(top_k, 25),
+                                  probe=LEXICAL_PROBE))
+            except Exception:
+                return [], 0.0
+        if not rows:
+            return [], 0.0
+        best = rows[0]["hits"] / len(terms)
+        return [(r["id"], r["score"]) for r in rows], best
+
+    @staticmethod
+    def _lucene_all(text: str, keep: int = 0) -> str:
+        """Require every meaningful term instead of accepting any of them.
+
+        Default OR semantics sink the answer: "Mornay Sauce Gruyere Parmesan"
+        matched hundreds of nodes on the word "sauce" alone, and the eleven
+        nodes that actually say Mornay never reached the top 25. Requiring the
+        terms makes the rare one decide the result, which is what a
+        verification query means.
+        """
+        terms = [w for w in re.findall(r"[\w\u00c0-\u017f]{3,}", text)
+                 if w.lower() not in _FUNCTION_WORDS]
+        if keep and len(terms) > keep:
+            # Graded relaxation: keep the most specific terms, longest first.
+            # Length is a crude proxy for specificity, but a domain-agnostic
+            # one — no word list to maintain per corpus.
+            terms = sorted(terms, key=len, reverse=True)[:keep]
+        return " ".join(f"+{_escape_lucene(w)}" for w in terms)
 
     def fulltext_search(
-        self, text: str, top_k: int = DEFAULT_TOP_K, domain: str | None = None
+        self, text: str, top_k: int = DEFAULT_TOP_K, domain: str | None = None,
+        require_all: bool = False, require_terms: int = 0,
     ) -> list[tuple[str, float]]:
         cypher = (
             "CALL db.index.fulltext.queryNodes('entity_text', $q) "
@@ -306,10 +411,14 @@ class HybridRetriever:
             + self._validity_clause("node")
             + " RETURN node.id AS id, score ORDER BY score DESC LIMIT $k"
         )
+        query = (self._lucene_all(text, keep=require_terms) if require_all
+                 else _escape_lucene(text))
+        if not query.strip():
+            return []
         with self.loader._session() as s:
             try:
-                return [(r["id"], r["score"]) for r in s.run(cypher, q=_escape_lucene(text),
-                                                             k=top_k, domain=domain)]
+                return [(r["id"], r["score"])
+                        for r in s.run(cypher, q=query, k=top_k, domain=domain)]
             except Exception:
                 return []
 
@@ -351,7 +460,12 @@ class HybridRetriever:
                 "RETURN n.id AS id, n.label AS label, n.source_file AS source_file, "
                 "n.source_location AS source_location, n.text_excerpt AS text_excerpt, "
                 "n.evidence AS evidence, n.lang AS lang, n.confidence AS confidence, "
-                "n.extraction_method AS extraction_method, n.verification AS verification",
+                "n.extraction_method AS extraction_method, n.verification AS verification, "
+                # `passage` is the paragraph the node's quote came from, and it is
+                # what settles a claim: `evidence` averages 32 characters, which
+                # names a fact without stating it. Omitting it here made callers
+                # re-query Neo4j for the one field they actually needed.
+                "n.passage AS passage",
                 ids=node_ids,
             )
             return {r["id"]: dict(r) for r in rows}
@@ -374,6 +488,8 @@ class HybridRetriever:
         result_window: int = RESULT_WINDOW,
         fast_path: bool = True,
         strong_fulltext: float = STRONG_FULLTEXT,
+        embed_fn: "Callable[[str], list[float]] | None" = None,
+        must: str = "",
     ) -> RetrievalResult:
         """Run the hybrid pipeline. `channels` allows the eval's ablations."""
         variants = self.expand_query(query_text, deep=deep)
@@ -385,11 +501,33 @@ class HybridRetriever:
         # Fast path: probe the lexical channel first. If the corpus literally
         # contains the phrase, the answer is settled and the embedding — the
         # single most expensive step — is never computed.
+        #
+        # `embed_fn` is what makes that saving real. With `embedding` passed in,
+        # the caller has already paid for the encoder before learning whether it
+        # was needed; handing retrieval the means to encode lets it decide.
+        # Measured on verification queries: 21.7 ms -> 5.9 ms.
+        lazy = embedding is None and embed_fn is not None
         if fast_path and "fulltext" in channels:
-            probe = self.fulltext_search(query_text, top_k=top_k, domain=domain)
+            # Require every term. That a single node contains all of them is
+            # real evidence the corpus speaks to the question; a BM25 *score*
+            # is not, and trusting one here reintroduced the exact failure the
+            # refusal calibration documents — in a small graph a rare word
+            # scores high precisely BECAUSE it is rare, so an out-of-corpus
+            # query ("kubernetes ingress controller") scored above the floor
+            # and was answered instead of refused.
+            # Require every term the CORPUS ACTUALLY KNOWS, and drop the rest.
+            # Lexical support means one passage literally contains most of what
+            # was asked — not that some word scored high. In a small graph a
+            # rare word scores high BECAUSE it is rare, which is how "employee
+            # stock option vesting schedule" matched "stock" (the broth) and was
+            # answered instead of refused.
+            probe, covered = self._lexical_evidence(query_text, domain, top_k, must)
+            if covered < MIN_TERM_COVERAGE:
+                probe = []
             if probe:
+                channel_counts["term_coverage"] = round(covered, 2)
                 best_fulltext = max(s for _, s in probe)
-                if best_fulltext >= strong_fulltext:
+                if True:
                     ranked["fulltext:0"] = [i for i, _ in probe]
                     channel_counts["fulltext"] = len(probe)
                     channel_counts["fast_path"] = 1
@@ -397,6 +535,8 @@ class HybridRetriever:
                     channels = tuple(c for c in channels if c != "vector")
                     variants = variants[:1]
 
+        if "vector" in channels and embedding is None and lazy:
+            embedding = embed_fn(query_text)      # only now is it actually needed
         if "vector" in channels and embedding is not None:
             vec = self.vector_search(embedding, top_k=top_k, domain=domain)
             ranked["vector"] = [i for i, _ in vec]
@@ -441,6 +581,12 @@ class HybridRetriever:
 
         seed_ids = [i for i, _ in sorted(fused.items(), key=lambda kv: -kv[1])[:seeds]]
 
+        # When one passage already contains nearly the whole query, its
+        # neighbours add nothing but a round trip and more nodes to rank. Skip
+        # the hop; anything below that bar still gets the full expansion.
+        if channel_counts.get("term_coverage", 0.0) >= SETTLED_COVERAGE:
+            channels = tuple(c for c in channels if c != "graph")
+
         if "graph" in channels and hops:
             for row in self.expand_graph(seed_ids, hops=hops):
                 # Expansion contributes below any directly-retrieved seed.
@@ -448,9 +594,15 @@ class HybridRetriever:
                 fused[row["id"]] += 0.5 / (RRF_K + seeds) * float(row.get("w") or 1.0)
             channel_counts["graph"] = len(fused) - len(seed_ids)
 
-        props = self.hydrate(list(fused))
+        # Hydrate only what can reach the window. Every node carries its
+        # passage — that is the point of it — so pulling the whole fused set
+        # ships kilobytes per node the caller will never look at, and that was
+        # the largest single cost left in a query.
+        ordered = sorted(fused.items(), key=lambda kv: -kv[1])
+        head = ordered[: max(result_window * HYDRATE_FACTOR, DEFAULT_SEEDS)]
+        props = self.hydrate([nid for nid, _ in head])
         hits: list[Hit] = []
-        for nid, score in sorted(fused.items(), key=lambda kv: -kv[1]):
+        for nid, score in head:
             p = props.get(nid)
             if not p:
                 continue

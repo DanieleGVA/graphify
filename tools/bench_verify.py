@@ -254,7 +254,10 @@ def main() -> int:
     try:
         for c in claims:
             t0 = time.perf_counter()
-            res = retriever.query(c["query"], embedding=embedder.encode([c["query"]])[0],
+            # embed_fn, not a precomputed embedding: the encoder is the most
+            # expensive step and the lexical fast path exists to skip it. Paying
+            # for it up front would measure the old path.
+            res = retriever.query(c["query"], embed_fn=lambda q: embedder.encode([q])[0],
                                   channels=("vector", "fulltext", "graph"), hops=1,
                                   domain="pilot")
             ids = [h.node_id for h in res.hits[: args.top]]

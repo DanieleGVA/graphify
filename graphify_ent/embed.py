@@ -21,12 +21,19 @@ from pathlib import Path
 
 __all__ = ["EmbedStats", "Embedder", "embed_graph"]
 
-DEFAULT_MODEL = "BAAI/bge-m3"
+#: Chosen on measurement, not reputation: on this corpus MiniLM-L12-v2 scored
+#: higher than BGE-m3 (84.9 vs 81.4 overall, 75.0 vs 66.7 cross-language),
+#: encoded 39x faster and stores 384 floats instead of 1024. The speed is not a
+#: nicety — the encoder was 58% of query latency, and a documentary check runs
+#: one query per claim.
+DEFAULT_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+#: Kept reachable so a corpus already embedded the old way can be re-measured.
+PREVIOUS_MODEL = "BAAI/bge-m3"
 DEFAULT_BATCH = 32
 #: Vector width. Overridable because it is a property of the chosen model, not
 #: of the system: BGE-m3 emits 1024, MiniLM-L12-v2 emits 384. The schema reads
 #: the same value, so the two cannot silently disagree.
-EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
+EMBED_DIM = int(os.environ.get("EMBED_DIM", "384"))
 
 #: Characters of node text handed to the encoder (see `_node_text`).
 EMBED_TEXT_CHARS = 700

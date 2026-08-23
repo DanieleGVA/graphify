@@ -16,12 +16,17 @@ CREATE CONSTRAINT concept_id IF NOT EXISTS
 // the source ("sifted flour") cannot reach the page that states it. Measured,
 // that is why a documentary check returned a plausible neighbouring page
 // instead of the recipe itself.
+// `standard-folding` strips diacritics on both sides of the comparison.
+// Without it the index is accent-exact: measured, "gruyere" matched 0 nodes
+// while "gruyère" matched 14, so anyone typing a French term without its
+// accents — which is what people type — retrieved nothing at all.
 CREATE FULLTEXT INDEX entity_text IF NOT EXISTS
-  FOR (n:Entity) ON EACH [n.label, n.text_excerpt, n.passage];
+  FOR (n:Entity) ON EACH [n.label, n.text_excerpt, n.passage]
+  OPTIONS {indexConfig: {`fulltext.analyzer`: 'standard-folding'}};
 
 CREATE VECTOR INDEX entity_embedding IF NOT EXISTS
   FOR (n:Entity) ON (n.embedding)
-  OPTIONS {indexConfig: {`vector.dimensions`: 1024,
+  OPTIONS {indexConfig: {`vector.dimensions`: 384,
                          `vector.similarity_function`: 'cosine'}};
 
 // --- Filter indexes --------------------------------------------------------
