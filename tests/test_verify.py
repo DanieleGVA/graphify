@@ -103,6 +103,16 @@ class TestAccents:
         v = _verifier(MORNAY)
         assert v.check(Claim("Mornay Sauce", "Gruyere Parmesan")).verdict == SUPPORTED
 
+    def test_soft_hyphen_inside_the_subject_is_invisible(self):
+        """PDF extraction writes "two-\xadstage cooling" with a soft hyphen.
+        Measured on the CIA book: retrieval returned the right page and the
+        adjudication rejected it on a character no reader can see."""
+        v = _verifier("In the two-\xadstage cooling method, foods must be "
+                      "cooled to 70°F/21°C within 2 hours.")
+        assert v.check(
+            Claim("two-stage cooling", "cooled to 21°C within 2 hours")
+        ).verdict == SUPPORTED
+
 
 class TestVerdicts:
     def test_supported_carries_the_deciding_sentence_not_the_page_head(self):

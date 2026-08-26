@@ -70,12 +70,20 @@ _WEAK = {"sauce", "cheese", "with", "into", "from", "that", "this", "quantity",
 _NEAR = 90
 
 
+#: Invisible characters PDF text extraction leaves inside words: the soft
+#: hyphen ("two-\xadstage"), zero-width spaces and the word joiner. Measured on
+#: the two-book corpus: the CIA book writes "two-­stage cooling" with a soft
+#: hyphen, retrieval returned the right page and the adjudication then rejected
+#: it on a character no reader can see.
+_INVISIBLE = dict.fromkeys(map(ord, "­​‌‍⁠"))
+
+
 def fold(s: str) -> str:
     """Strip diacritics. The source writes "Béchamel" and "Gruyère"; people
     type "bechamel" and "gruyere". The fulltext index folds — measured, without
     it "gruyere" matched nothing — and the adjudication has to fold too, or a
     passage the search correctly returned is then rejected on the accent."""
-    return "".join(c for c in unicodedata.normalize("NFKD", s or "")
+    return "".join(c for c in unicodedata.normalize("NFKD", (s or "").translate(_INVISIBLE))
                    if not unicodedata.combining(c))
 
 

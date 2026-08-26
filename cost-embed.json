@@ -1,8 +1,8 @@
 {
-  "embedded": 652,
-  "batches": 21,
-  "seconds": 9.51,
-  "nodes_per_s": 68.5,
+  "embedded": 280,
+  "batches": 9,
+  "seconds": 7.0,
+  "nodes_per_s": 40.0,
   "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "dim": 384,
   "cost_usd": 0.0
