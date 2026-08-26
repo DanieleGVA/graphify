@@ -55,30 +55,34 @@ DEFAULT_TOKEN_BUDGET = 4_000
 # carry no notion of "relevant at all", so the refusal decision is made on the
 # channels' own score semantics *before* fusion.
 #
-# Re-measured on the current corpus and encoder
-# (evidence/T73/refusal-calibration.json). The floor is a property of BOTH, and
-# carrying over a number calibrated for a different model is how a system stops
-# refusing without anyone noticing:
+# Re-measured for BGE-m3 on the two-book corpus, 2026-08-26
+# (evidence/T83/refusal-calibration.json). The floor is a property of the
+# encoder AND the corpus, and carrying over a number calibrated for a different
+# model is how a system stops refusing without anyone noticing — which is why
+# the encoder change of T83 could not ship without re-running this:
 #
-#   in corpus      min 0.736   p5 0.760   median 0.825   max 0.893   (n=34)
-#   out of corpus  min 0.560              median 0.622   max 0.660   (n=20)
+#   in corpus      min 0.766   median 0.820   max 0.893   (n=38)
+#   out of corpus  min 0.662   median 0.718   max 0.773   (n=24)
 #
 #     floor   out-of-corpus refused   in-corpus lost
-#     0.60    6/20                    0/34
-#     0.65    18/20                   0/34
-#     0.70    20/20                   0/34   <- chosen, sits in the gap
-#     0.75    20/20                   1/34
+#     0.65    0/24                    0/38
+#     0.70    5/24                    0/38     <- the MiniLM floor: near-blind here
+#     0.75    21/24                   0/38     <- chosen: most coverage, no loss
+#     0.80    24/24                   7/38
 #
-# The bands SEPARATE here, which they did not on the six-book corpus under
-# BGE-m3 (there they overlapped, and full refusal coverage cost 56% of recall).
-# Two things changed: MiniLM discriminates better on this material, and a single
-# coherent document has no near-neighbour for an unrelated question. 0.70 sits
-# in the gap with margin on both sides rather than on either boundary.
+# The bands OVERLAP under BGE-m3 (gap -0.008), where under MiniLM they separated
+# — the two encoders trade discrimination against cross-language reach, and this
+# programme needs the reach (architecture §D3). So no floor both refuses
+# everything foreign and keeps everything local, and the vector channel alone
+# cannot carry the refusal decision. It does not have to: refusal requires the
+# LEXICAL channel to be weak as well, and a foreign question that scores 0.78 on
+# a passage still shares none of its terms. The end-to-end refusal behaviour is
+# what is measured (Q2's unanswerable pairs), never this number on its own.
 #
 # BM25 still cannot arbitrate support: an out-of-corpus query scores high on a
 # rare word precisely BECAUSE it is rare. The lexical channel establishes
 # support only when a single node contains EVERY term of the query.
-MIN_VECTOR_SIMILARITY = 0.70
+MIN_VECTOR_SIMILARITY = 0.75
 MIN_FULLTEXT_SCORE = 1.0       # lexical-only fallback; cannot separate on its own
 
 #: The explicit-refusal path. Returning this is a *correct* outcome, never a failure.
