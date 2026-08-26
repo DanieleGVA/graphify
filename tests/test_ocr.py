@@ -14,6 +14,17 @@ import pytest
 
 fitz = pytest.importorskip("fitz", reason="PyMuPDF required")
 
+#: Tests that exercise the real OCR engine skip — visibly, not as failures —
+#: when pytesseract is absent. A suite that cannot be green on a machine
+#: without the optional engine turns "green pytest log" into prose instead of
+#: a machine-checkable gate (QA finding, T80/T74 revision).
+import importlib.util  # noqa: E402
+
+needs_tesseract = pytest.mark.skipif(
+    importlib.util.find_spec("pytesseract") is None,
+    reason="pytesseract not installed — real-engine OCR tests",
+)
+
 from graphify_ent.ocr import (  # noqa: E402
     OCR_METHOD_TAG,
     chars_per_page,
@@ -81,6 +92,7 @@ class TestTrigger:
 
 @requires_tesseract
 class TestOcrExtraction:
+    @needs_tesseract
     def test_scanned_pdf_yields_text(self, tmp_path):
         pdf = _scanned_pdf(tmp_path / "scan.pdf")
         pages = ocr_pdf_pages(pdf, cache_dir=tmp_path / "cache")
@@ -90,6 +102,7 @@ class TestOcrExtraction:
         assert "BECHAMEL" in joined or "ROUX" in joined
         assert sum(len(p) for p in pages) > 0
 
+    @needs_tesseract
     def test_result_is_cached_second_run_makes_zero_ocr_calls(self, tmp_path):
         """Acceptance: OCR is the expensive step — never repeat it."""
         pdf = _scanned_pdf(tmp_path / "scan.pdf")
@@ -107,6 +120,7 @@ class TestOcrExtraction:
         assert stats_second["ocr_calls"] == 0, "second run must make zero OCR calls"
         assert stats_second["cache_hits"] > 0
 
+    @needs_tesseract
     def test_cache_is_keyed_by_content_not_path(self, tmp_path):
         pdf_a = _scanned_pdf(tmp_path / "a.pdf")
         pdf_b = _scanned_pdf(tmp_path / "b.pdf")  # identical content, different name
@@ -123,6 +137,7 @@ class TestTagging:
         assert OCR_METHOD_TAG == "ocr"
 
     @requires_tesseract
+    @needs_tesseract
     def test_extract_reports_method(self, tmp_path):
         from graphify_ent.ocr import extract_pdf_text_with_ocr
 

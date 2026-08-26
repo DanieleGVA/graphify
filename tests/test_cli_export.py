@@ -14,9 +14,17 @@ import pytest
 
 PYTHON = sys.executable
 FIXTURES = Path(__file__).parent / "fixtures"
+#: The subprocess must import THIS repo's package, not whatever is installed.
+#: A relative `PYTHONPATH=.` dies when cwd is a temp dir: the child silently
+#: falls back to site-packages and these tests then pin the installed version's
+#: behavior instead of the repo's — measured as a FileNotFoundError on a fix
+#: (#934) that the repo has and the installed 0.8.14 code did not.
+REPO_ROOT = str(Path(__file__).resolve().parent.parent)
 
 
 def _run(args: list[str], cwd: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    env = dict(env if env is not None else os.environ)
+    env["PYTHONPATH"] = REPO_ROOT + os.pathsep + env.get("PYTHONPATH", "")
     return subprocess.run(
         [PYTHON, "-m", "graphify"] + args,
         cwd=cwd,
