@@ -138,18 +138,27 @@ def embed_graph(
     stats = EmbedStats(model=embedder.model_name)
     t_start = time.perf_counter()
 
+    # Walk the id order with a cursor instead of re-asking for "any node
+    # without an embedding". That query cannot use an index — the property is
+    # absent, and Neo4j does not index a missing list — so every batch rescanned
+    # the whole label. Measured re-embedding 53k nodes: the rate fell from
+    # ~700/min to ~420/min as the scan grew, which is the quadratic signature.
+    # `id` is unique-constrained, so seeking past the cursor is an index range
+    # scan. Still resumable: a restart begins at the first unembedded id.
+    cursor = ""
     while True:
         with loader._session() as s:
             rows = list(
                 s.run(
-                    "MATCH (n:Entity) WHERE n.embedding IS NULL "
+                    "MATCH (n:Entity) WHERE n.id > $cursor AND n.embedding IS NULL "
                     "RETURN n.id AS id, n.label AS label, n.text_excerpt AS text_excerpt, n.passage AS passage "
-                    "LIMIT $k",
-                    k=batch_size,
+                    "ORDER BY n.id LIMIT $k",
+                    k=batch_size, cursor=cursor,
                 )
             )
         if not rows:
             break
+        cursor = rows[-1]["id"]
 
         texts = [_node_text(r) for r in rows]
         t0 = time.perf_counter()
