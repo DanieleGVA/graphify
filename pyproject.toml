@@ -69,6 +69,7 @@ ent = [
     "uvicorn",
     "pyyaml",           # authority.yaml
     "anthropic",        # Phase 1.5 / 6.4 LLM passes (LLM_ENDPOINT env)
+    "mcp",              # component: stdio MCP server (graphify-ent mcp)
 ]
 
 kimi = ["openai", "tiktoken"]
@@ -81,6 +82,7 @@ all = ["mcp", "neo4j", "pypdf", "markdownify", "watchdog", "graspologic; python_
 
 [project.scripts]
 graphify = "graphify.__main__:main"
+graphify-ent = "graphify_ent.cli:main"
 
 [dependency-groups]
 dev = [
