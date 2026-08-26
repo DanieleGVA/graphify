@@ -29,6 +29,7 @@ Design notes:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import threading
@@ -40,6 +41,7 @@ from pathlib import Path
 
 from graphify_ent.compact_schema import COMPACT_EXTRACTION_SYSTEM, parse_compact
 from graphify_ent.file_slice import read_slice_text, slice_pdf
+from graphify_ent.ratelimit import AdaptiveLimiter
 
 CHAR_CAP = 20_000
 PRICING = {"deepseek-v4-flash": {"input": 0.14, "output": 0.28}}
@@ -62,7 +64,15 @@ def slug(name: str, n: int = 22) -> str:
     return _ID_OK.sub("_", name.lower())[:n].strip("_")
 
 
-def call(model: str, system: str, user: str, timeout: int, attempts: int = 3):
+def call(model: str, system: str, user: str, timeout: int, attempts: int = 6,
+         limiter: AdaptiveLimiter | None = None):
+    """One model call, honouring the endpoint's rate limit.
+
+    A 429 is not a failure: it is the service naming a pace. Measured on the
+    12-book ingest, treating it as a failure after three short retries lost 77
+    slices in five minutes. The limiter narrows concurrency on rejection and
+    the wait comes from `Retry-After` when the server sends one.
+    """
     last = None
     for a in range(attempts):
         try:
@@ -74,26 +84,44 @@ def call(model: str, system: str, user: str, timeout: int, attempts: int = 3):
             }).encode()
             req = urllib.request.Request("http://localhost:11434/api/chat", data=payload,
                                          headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                env = json.loads(r.read())
+            ctx = limiter.slot() if limiter else contextlib.nullcontext()
+            with ctx:
+                with urllib.request.urlopen(req, timeout=timeout) as r:
+                    env = json.loads(r.read())
+            if limiter:
+                limiter.succeeded()
             return (env.get("message") or {}).get("content") or "", {
                 "in_tokens": env.get("prompt_eval_count", 0),
                 "out_tokens": env.get("eval_count", 0),
                 "truncated": env.get("done_reason") == "length",
             }
+        except urllib.error.HTTPError as exc:
+            last = exc
+            if exc.code == 429:
+                retry_after = exc.headers.get("Retry-After") if exc.headers else None
+                try:
+                    retry_after = float(retry_after) if retry_after else None
+                except ValueError:
+                    retry_after = None
+                wait = (limiter.rejected(retry_after, a) if limiter
+                        else min(60.0, 2.0 * (2 ** a)))
+                time.sleep(wait)
+            else:
+                time.sleep(2 ** a * 3)
         except Exception as exc:                      # network, timeout, 5xx
             last = exc
             time.sleep(2 ** a * 3)
     raise RuntimeError(f"{type(last).__name__}: {str(last)[:120]}")
 
 
-def do_slice(task: dict, model: str, timeout: int) -> dict:
+def do_slice(task: dict, model: str, timeout: int,
+              limiter: AdaptiveLimiter | None = None) -> dict:
     pdf = Path(task["pdf"])
     sl = task["slice_obj"]
     text = read_slice_text(sl)
     user = (f"=== {pdf.name} (pages {sl.page_start+1}-{sl.page_end+1}) ===\n{text}")
     t0 = time.perf_counter()
-    content, meta = call(model, COMPACT_EXTRACTION_SYSTEM, user, timeout)
+    content, meta = call(model, COMPACT_EXTRACTION_SYSTEM, user, timeout, limiter=limiter)
     nodes, edges = parse_compact(content)
 
     src = norm(text)
@@ -149,7 +177,10 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", type=Path, default=Path("../pilot"))
     ap.add_argument("--model", default="deepseek-v4-flash:cloud")
-    ap.add_argument("--workers", type=int, default=6)
+    ap.add_argument("--workers", type=int, default=12,
+                    help="concorrenza iniziale; si adatta ai 429 del servizio")
+    ap.add_argument("--max-workers", type=int, default=48,
+                    help="tetto a cui la concorrenza può allargarsi")
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--limit", type=int, default=0, help="smoke test: first N slices")
     ap.add_argument("--checkpoint", type=Path,
@@ -180,13 +211,15 @@ def main() -> int:
     print(f"porzioni totali {len(tasks)}  già fatte {len(done)}  da fare {len(todo)}",
           flush=True)
 
+    limiter = AdaptiveLimiter(start=args.workers, minimum=2,
+                              maximum=max(args.workers, args.max_workers))
     t_start = time.perf_counter()
     failures: list[dict] = []
     completed = 0
     fh = args.checkpoint.open("a")
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futs = {pool.submit(do_slice, t, args.model, args.timeout): t for t in todo}
+    with ThreadPoolExecutor(max_workers=max(args.workers, args.max_workers)) as pool:
+        futs = {pool.submit(do_slice, t, args.model, args.timeout, limiter): t for t in todo}
         for fut in as_completed(futs):
             t = futs[fut]
             try:
@@ -208,7 +241,8 @@ def main() -> int:
                 kept = sum(r["nodes_kept"] for r in done.values())
                 with _print_lock:
                     print(f"  {completed}/{len(todo)}  nodi {kept:,}  "
-                          f"{rate*60:.1f} porzioni/min  restano ~{eta:.0f} min", flush=True)
+                          f"{rate*60:.1f} porzioni/min  restano ~{eta:.0f} min  "
+                          f"[conc {limiter.limit}, 429 {limiter.rejections}]", flush=True)
     fh.close()
 
     # --- assemble -------------------------------------------------------
@@ -237,6 +271,7 @@ def main() -> int:
         "cost_usd": round(in_tok / 1e6 * p["input"] + out_tok / 1e6 * p["output"], 4)
         if p else None,
         "wall_minutes": round((time.perf_counter() - t_start) / 60, 1),
+        "rate_limit": limiter.stats(),
     }
     args.out.write_text(json.dumps({"nodes": nodes, "edges": edges}, ensure_ascii=False))
     args.stats.write_text(json.dumps(stats, indent=2, ensure_ascii=False))
