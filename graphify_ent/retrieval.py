@@ -28,6 +28,7 @@ already threaded through here so that change is additive.
 from __future__ import annotations
 
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -271,7 +272,28 @@ def content_terms(text: str) -> list[str]:
 
 
 def content_query(text: str) -> str:
-    """`text` reduced to its content words; the original if nothing survives."""
+    """`text` reduced to its content words — OFF by default, and the reason is
+    measured rather than assumed.
+
+    Reducing the BM25 query to content words helps a weak multilingual encoder
+    and hurts a strong one: the ablation at equal encoder and equal floor
+    (evidence/T83/content-filter-ablation.json) gives
+
+        BM25 query      Q2 reported   cross-language   card check   canon
+        content words   69.0 %        42.9 %           25/25        99.6 %
+        whole phrase    71.4 %        57.1 %           25/25        99.6 %
+
+    so the whole phrase wins on the metric that moved and costs nothing on the
+    two approved benchmarks. What DOES matter in both configurations is that
+    interrogatives no longer count as required terms (`_FUNCTION_WORDS`), which
+    is a different mechanism and stays on.
+
+    `ENTERPRIPHY_CONTENT_FILTER=1` turns the reduction back on — kept because
+    the trade-off is a property of the encoder, and the next encoder change has
+    to be able to re-run this ablation instead of inheriting a verdict.
+    """
+    if os.environ.get("ENTERPRIPHY_CONTENT_FILTER") != "1":
+        return text
     terms = content_terms(text)
     return " ".join(terms) if terms else text
 

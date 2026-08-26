@@ -137,13 +137,24 @@ class TestContentTerms:
         assert content_terms("Che proporzioni ha un roux tra farina e burro?") == \
             ["proporzioni", "roux", "farina", "burro"]
 
-    def test_never_returns_empty_query(self):
+    def test_never_returns_empty_query(self, monkeypatch):
         """All-stopword input must fall back to the original: an empty Lucene
         query returns nothing at all, which reads as 'corpus does not know'."""
+        monkeypatch.setenv("ENTERPRIPHY_CONTENT_FILTER", "1")
         assert content_query("what is it?") == "what is it?"
 
     def test_deduplicates_while_preserving_order(self):
         assert content_terms("sugar and sugar and salt") == ["sugar", "salt"]
+
+    def test_reduction_is_off_by_default(self, monkeypatch):
+        """Measured: reducing the BM25 query helps a weak encoder and hurts a
+        strong one (Q2 69.0% reduced vs 71.4% whole, same encoder and floor)."""
+        monkeypatch.delenv("ENTERPRIPHY_CONTENT_FILTER", raising=False)
+        assert content_query("What does HACCP stand for?") == "What does HACCP stand for?"
+
+    def test_reduction_can_be_switched_on_for_ablation(self, monkeypatch):
+        monkeypatch.setenv("ENTERPRIPHY_CONTENT_FILTER", "1")
+        assert content_query("What does HACCP stand for?") == "HACCP stand"
 
 
 class TestQueryExpansion:
