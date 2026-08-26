@@ -110,7 +110,21 @@ _FUNCTION_WORDS = frozenset("""
 and the for with from that this into out are was were has have had not but
 les des une aux par sur dans pour avec est sont ont été plus
 del della delle degli con per una sono stato come anche
+what which who whom whose when where why how does did doing must should would
+could shall will can may might there their they them its it's you your
+quel quelle quels quelles quoi comment combien pourquoi lorsque dont leur leurs
+faut fait font doit doivent peut peuvent sera seront
+quale quali quanto quanta quanti quante cosa perche perché quando dove
+che chi cui tra fra much many
+deve devono viene vengono vanno prima dopo essere stata state stati
 """.split())
+#: Interrogative and auxiliary words were absent from the set above until Q2
+#: was first measured (2026-08-26). They mattered: "What does HACCP stand for?"
+#: retrieved Flour, gluten and Stabilizers, while "HACCP stands for" retrieved
+#: the right page first. Every earlier benchmark had queried in keyword form,
+#: so the whole system had been tuned and measured without ever seeing a
+#: question. Removing a word here only stops it being REQUIRED — it never
+#: excludes a passage — so the set errs on the generous side.
 
 #: Coverage at which a query counts as settled by one passage, so graph
 #: expansion is skipped. Above this the neighbours are noise, and the hop is
@@ -231,6 +245,31 @@ def rrf_fuse(ranked_lists: dict[str, list[str]], k: int = RRF_K) -> dict[str, fl
 
 def _escape_lucene(q: str) -> str:
     return re.sub(r'([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)', r"\\\1", q)
+
+
+def content_terms(text: str) -> list[str]:
+    """The words of a query that carry meaning, in order, duplicates dropped.
+
+    A question is mostly scaffolding: of "What does HACCP stand for?" only two
+    words select anything. Scoring the scaffolding is how BM25 ranked a page
+    about flour above the page that answers it.
+    """
+    seen, out = set(), []
+    for w in re.findall(r"[\wÀ-ſ°]+", text or ""):
+        low = w.lower()
+        if len(low) < 3 and not any(c.isdigit() for c in low):
+            continue
+        if low in _FUNCTION_WORDS or low in seen:
+            continue
+        seen.add(low)
+        out.append(w)
+    return out
+
+
+def content_query(text: str) -> str:
+    """`text` reduced to its content words; the original if nothing survives."""
+    terms = content_terms(text)
+    return " ".join(terms) if terms else text
 
 
 def verify_evidence_binding(text: str, source_text: str, min_len: int = 24) -> bool:
@@ -371,7 +410,8 @@ class HybridRetriever:
             "RETURN node.id AS id, score, hits ORDER BY hits DESC, score DESC LIMIT $k")
         with self.loader._session() as s:
             try:
-                rows = list(s.run(cypher, q=_escape_lucene(query_text), domain=domain,
+                rows = list(s.run(cypher, q=_escape_lucene(content_query(query_text)),
+                                  domain=domain,
                                   terms=terms, anchors=anchors, k=max(top_k, 25),
                                   probe=LEXICAL_PROBE))
             except Exception:
@@ -412,7 +452,7 @@ class HybridRetriever:
             + " RETURN node.id AS id, score ORDER BY score DESC LIMIT $k"
         )
         query = (self._lucene_all(text, keep=require_terms) if require_all
-                 else _escape_lucene(text))
+                 else _escape_lucene(content_query(text)))
         if not query.strip():
             return []
         with self.loader._session() as s:

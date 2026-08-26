@@ -61,6 +61,27 @@ class EmbedStats:
         }
 
 
+def _device() -> str | None:
+    """Where to run the encoder. `EMBED_DEVICE` wins; otherwise the platform's
+    accelerator if torch reports one, and None to let sentence-transformers
+    decide when torch is not importable. Measured on this corpus: the Apple GPU
+    embeds the two-book graph in a fraction of the CPU time, and enrichment
+    passes over 53k nodes are otherwise an hour of wall clock."""
+    forced = os.environ.get("EMBED_DEVICE")
+    if forced:
+        return forced
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        return None
+    return None
+
+
 class Embedder:
     """Lazy singleton around the sentence-transformers model."""
 
@@ -73,7 +94,7 @@ class Embedder:
         if Embedder._model is None:
             from sentence_transformers import SentenceTransformer
 
-            Embedder._model = SentenceTransformer(self.model_name)
+            Embedder._model = SentenceTransformer(self.model_name, device=_device())
         return Embedder._model
 
     def encode(self, texts: list[str]) -> list[list[float]]:

@@ -15,6 +15,8 @@ from graphify_ent.retrieval import (
     REFUSAL_TEXT,
     Hit,
     HybridRetriever,
+    content_query,
+    content_terms,
     rrf_fuse,
     serialize_context,
     verify_evidence_binding,
@@ -115,6 +117,33 @@ class TestProvenanceWeighting:
     def test_unverified_is_down_weighted(self):
         assert Hit("a", 1, verification="unverified").provenance_weight() < \
                Hit("b", 1, verification="verified").provenance_weight()
+
+
+class TestContentTerms:
+    """A question is mostly scaffolding; scoring the scaffolding is how BM25
+    ranked a page about flour above the page that answers the question."""
+
+    def test_drops_interrogatives_and_auxiliaries(self):
+        assert content_terms("What does HACCP stand for?") == ["HACCP", "stand"]
+
+    def test_keeps_figures_and_units(self):
+        terms = content_terms("How much sugar for 8 oz/227 g of egg whites?")
+        assert terms == ["sugar", "8", "227", "egg", "whites"], \
+            "figures survive; the slash is a separator, not part of a token"
+
+    def test_handles_french_and_italian_questions(self):
+        assert content_terms("Quelles sont les proportions d'un roux ?") == \
+            ["proportions", "roux"]
+        assert content_terms("Che proporzioni ha un roux tra farina e burro?") == \
+            ["proporzioni", "roux", "farina", "burro"]
+
+    def test_never_returns_empty_query(self):
+        """All-stopword input must fall back to the original: an empty Lucene
+        query returns nothing at all, which reads as 'corpus does not know'."""
+        assert content_query("what is it?") == "what is it?"
+
+    def test_deduplicates_while_preserving_order(self):
+        assert content_terms("sugar and sugar and salt") == ["sugar", "salt"]
 
 
 class TestQueryExpansion:
