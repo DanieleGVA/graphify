@@ -243,12 +243,32 @@ class Verifier:
     #: quantity a clause later.
     NEAR_WINDOW = 320
 
+    #: How many lines above a table row are read as its headers, and how many
+    #: lines a row spans. A PDF table puts every cell on its own line, so a row
+    #: is name + figure + description, and its family header sits a few rows up.
+    TABLE_CONTEXT = 6
+    TABLE_ROW = 3
+
     @staticmethod
     def _is_tabular(text: str) -> bool:
         """A page that lists many figures against many names. There a number
-        found "somewhere on the page" belongs to some other row."""
-        qty = len(_QTY.findall(text or ""))
-        return qty >= 6
+        found "somewhere on the page" belongs to some other row.
+
+        Counting figures alone is not enough: a food-safety page discusses half
+        a dozen temperatures in ordinary sentences and was read as a table, so
+        the row logic pulled the two lines after a sentence and found a figure
+        from the next paragraph. What distinguishes a table in extracted PDF
+        text is that each cell is its own line — a line whose whole content IS
+        the figure ("160°F/71°C"). Prose never produces those.
+        """
+        if len(_QTY.findall(text or "")) < 6:
+            return False
+        cells = 0
+        for ln in (text or "").splitlines():
+            rest = re.sub(r"[\s/,;:·|–—-]", "", _QTY.sub("", ln))
+            if ln.strip() and not rest:
+                cells += 1
+        return cells >= 3
 
     def _near_subject(self, subject: str, text: str) -> str:
         """The part of `text` that speaks about this subject.
@@ -268,20 +288,38 @@ class Verifier:
         if self._is_tabular(text):
             # In a PDF table each cell is its own line: the row reads
             # "Beef, veal, lamb, pork" and the figure "160°F/71°C" sits on the
-            # NEXT line. So take the matching line and the two that follow.
+            # NEXT line. So a row is the matching line and the two that follow.
             #
-            # The anchor is the RAREST word of the subject, not the longest:
-            # for "ground beef", "ground" heads the whole family of rows
-            # ("Ground meat and meat mixtures") while "beef" names exactly one.
-            # Anchoring on the longest word read the poultry row and confirmed
-            # 74 °C for beef.
+            # No single word of the subject picks that row, because the table is
+            # NESTED — a family header governs several rows:
+            #
+            #     Ground meat and meat mixtures      <- "ground" lives here
+            #       Turkey, chicken       165°F/74°C
+            #       Beef, veal, lamb, pork  160°F/71°C   <- "beef" lives here
+            #
+            # Anchoring on the longest word ("ground") reads the poultry row and
+            # confirms 74 °C for ground beef; anchoring on the rarest picks the
+            # header, which is the same row again — measured, both ways. What
+            # identifies the row is the two words TOGETHER: score each line by
+            # how much of the subject its own text plus the headers above it
+            # account for, and keep the lines that account for the most. A line
+            # that contributes nothing of the subject ("Turkey, chicken") is not
+            # a candidate at all, and when several tie the caller still sees
+            # several figures and declares the ambiguity.
             lines = [ln for ln in text.splitlines() if ln.strip()]
-            body = norm(text)
-            anchor = min(words, key=lambda w: (body.count(w), -len(w)))
-            picked: list[str] = []
+            best, hits = 0, []
             for i, ln in enumerate(lines):
-                if anchor in norm(ln):
-                    picked.extend(lines[i: i + 3])
+                if not any(w in norm(ln) for w in words):
+                    continue
+                ctx = norm("\n".join(lines[max(0, i - self.TABLE_CONTEXT): i + 1]))
+                cover = sum(1 for w in words if w in ctx)
+                if cover > best:
+                    best, hits = cover, [i]
+                elif cover == best:
+                    hits.append(i)
+            picked: list[str] = []
+            for i in hits:
+                picked.extend(lines[i: i + self.TABLE_ROW])
             return "\n".join(picked)
         out = []
         body = norm(text)
@@ -290,6 +328,67 @@ class Verifier:
             lo = max(0, m.start() - self.NEAR_WINDOW)
             out.append(text[lo: m.end() + self.NEAR_WINDOW])
         return "\n".join(out) if out else ""
+
+    def _sentences_about(self, subject: str, text: str, also: str = "") -> str:
+        """The sentences that name the subject, and nothing else.
+
+        Tighter than the character window and often decisive: a food-safety
+        page states its rule in one sentence — "reheated to at least 165°F/74°C
+        for a minimum of 15 seconds" — while the paragraph after it discusses a
+        different temperature. A window wide enough for prose reaches that
+        paragraph and the two figures then look like a table's ambiguity.
+        """
+        words = [w for w in norm(subject).split() if len(w) > 3 and w not in _WEAK]
+        if not words:
+            return ""
+        anchor = max(words, key=len)
+        parts = re.split(r"(?<=[.!?])[\s ]+", text or "")
+        # What the aspect adds BEYOND the subject. "reheated foods" / "reheated
+        # to at least" share their first word, and keeping it would let every
+        # sentence about reheating through — including "holds reheated foods
+        # above 135°F/57°C", which is a different rule with a different figure.
+        # The discriminating word is "least".
+        extra = [w for w in norm(also).split()
+                 if len(w) > 3 and w not in _WEAK and w not in words]
+        keep = []
+        for p in parts:
+            low = norm(p)
+            if anchor not in low:
+                continue
+            # The aspect is what says WHICH relation is meant. "reheated to at
+            # least" and "brought to the proper temperature" are two sentences
+            # of the same page, both about reheating, with two different
+            # figures: without the aspect the scope holds both and the guard
+            # below correctly calls it ambiguous — correctly, and uselessly.
+            if extra and not any(w in low for w in extra):
+                continue
+            keep.append(p)
+        return "\n".join(keep)
+
+    def _scopes(self, claim: "Claim", text: str) -> list[str]:
+        """Places to read a figure, tightest first.
+
+        Adjudication takes the first one that offers a figure in the unit the
+        claim uses. Tightest-first is the whole discipline: a wider scope is a
+        weaker claim about which figure belongs to which subject, and widening
+        past what actually names the subject is how a number from the next
+        paragraph — or the next table row — gets read as an answer.
+        """
+        subject = claim.subject
+        if self._is_tabular(text):
+            row = self._near_subject(subject, text)
+            # A table has no prose to fall back on: a figure outside the row is
+            # another row's, never this one's.
+            return [row] if row else [text]
+        near = self._near_subject(subject, text)
+        scopes = [self._sentences_about(subject, text, also=claim.aspect),
+                  self._sentences_about(subject, text),
+                  near]
+        # Only when the subject cannot be located at all does the whole page
+        # come back into play — `_names` is deliberately fuzzier than these
+        # anchors, so that case exists and refusing it outright would lose
+        # evidence the system used to find.
+        return [s for s in scopes if s] or [text]
 
     # -- adjudication -----------------------------------------------------
     def _match(self, claim: Claim, text: str) -> tuple[bool, str]:
@@ -329,36 +428,42 @@ class Verifier:
         # any of them confirmed "ground beef at 74 °C" from the line about
         # ground poultry. The window is generous — prose separates a subject
         # from its number — but it is a window.
-        found = quantities(text)
-        # A doneness table lists many meats against many temperatures, nested
-        # ("Ground meat and meat mixtures" over "Beef, veal, lamb, pork"), and
-        # which row governs is structure the passage no longer carries. When
-        # several DIFFERENT temperatures sit on such a page, saying "the table
-        # gives several values" is the correct answer — picking one silently is
-        # the failure this system exists to prevent. Measured: without this, a
-        # card claiming 74 °C for ground beef was confirmed from the poultry
-        # row. Restricted to temperatures, which is where it was measured: an
-        # ingredient list also holds many figures, and there the aspect names
-        # which one is meant.
-        if want[0][1] == "c":
-            temps = {round(v) for v, u in found if u == "c"}
-            if len(temps) > 1:
-                return False, ("ambiguous: the page gives several temperatures "
-                               f"({', '.join(str(t) for t in sorted(temps))} C)")
-        if not found:
-            return False, ""
-        for wv, wu in want:
-            for fv, fu in found:
-                if fu != wu:
-                    continue
-                tol = (TEMP_TOLERANCE_C if wu == "c"
-                       else self.tolerance * max(wv, 1e-9))
-                if abs(fv - wv) <= tol:
-                    return True, f"{fv:g} {fu} ≈ {wv:g} {wu}"
-        # Same unit present, different magnitude: the source disagrees.
-        same_unit = [f"{fv:g} {fu}" for fv, fu in found if fu == want[0][1]]
-        return False, ("differs: source says " + ", ".join(same_unit[:4])
-                       if same_unit else "")
+        # `_near_subject` was written for this line, with its measurements in
+        # its docstring, and was never called: `quantities(text)` read the whole
+        # page, so the ambiguity guard below declined every table — which is
+        # exactly where a doneness figure lives. Two claims of the card set
+        # failed that way with the right page already ranked first.
+        unit = want[0][1]
+        for scope in self._scopes(claim, text):
+            found = [(fv, fu) for fv, fu in quantities(scope) if fu == unit]
+            if not found:
+                continue                       # nothing here; widen once
+            # A doneness table lists many meats against many temperatures,
+            # nested ("Ground meat and meat mixtures" over "Beef, veal, lamb,
+            # pork"), and which row governs is structure the passage no longer
+            # carries. When several DIFFERENT temperatures survive the tightest
+            # scope that names the subject, saying "the source gives several
+            # values" is the correct answer — picking one silently is the
+            # failure this system exists to prevent. Measured: without it, a
+            # card claiming 74 °C for ground beef was confirmed from the
+            # poultry row. Restricted to temperatures, which is where it was
+            # measured: an ingredient list also holds many figures, and there
+            # the aspect names which one is meant.
+            if unit == "c":
+                temps = {round(v) for v, _ in found}
+                if len(temps) > 1:
+                    return False, ("ambiguous: the page gives several temperatures "
+                                   f"({', '.join(str(t) for t in sorted(temps))} C)")
+            for wv, wu in want:
+                for fv, fu in found:
+                    tol = (TEMP_TOLERANCE_C if wu == "c"
+                           else self.tolerance * max(wv, 1e-9))
+                    if wu == fu and abs(fv - wv) <= tol:
+                        return True, f"{fv:g} {fu} ≈ {wv:g} {wu}"
+            # Same unit present, different magnitude: the source disagrees.
+            return False, ("differs: source says "
+                           + ", ".join(f"{fv:g} {fu}" for fv, fu in found[:4]))
+        return False, ""
 
     def check(self, claim: Claim) -> Finding:
         import time

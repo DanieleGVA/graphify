@@ -144,3 +144,140 @@ class TestVerdicts:
         v = _verifier(MORNAY)
         d = v.check(Claim("Mornay Sauce", "Gruyere Parmesan")).as_dict()
         assert d["verdict"] == SUPPORTED and d["source_location"]
+
+
+# ---------------------------------------------------------------- scoping
+# Where a figure is read from decides both halves of Q1: read too widely and a
+# neighbour's number confirms a false claim; read nothing and a true one goes
+# unverified. Every case below was measured on the card set (evidence/T99).
+
+DONENESS_TABLE = """Temperatures and Descriptions of Degrees
+of Doneness
+Meats are cooked to the internal temperature shown below.
+Degree of Doneness
+Final Resting
+Temperature
+Description
+Fresh beef, veal, and lamb
+Rare
+135°F/57°C
+Interior appearance shiny
+Medium
+160°F/71°C
+Pink to light pink
+Fresh pork
+Medium
+160°F/71°C
+Meat opaque throughout
+Poultry
+Whole birds (chicken, turkey, duck, goose)
+180°F/82°C
+Leg easy to move in socket
+Ground meat and meat mixtures
+Turkey, chicken
+165°F/74°C
+Opaque throughout; juices clear
+Beef, veal, lamb, pork
+160°F/71°C
+Opaque, may have blush of red
+Seafood
+Fish
+145°F/63°C
+Still moist"""
+
+REHEAT_PROSE = (
+    "Reheat Foods Safely\n"
+    "When foods are prepared ahead and then reheated, they should move through "
+    "the danger zone as rapidly as possible and be reheated to at least "
+    "165°F/74°C for a minimum of 15 seconds. If all proper cooling and "
+    "reheating procedures are followed each time, foods may be cooled and "
+    "reheated more than once. Do not use hot-holding equipment for reheating. "
+    "A steam table will adequately hold reheated foods above 135°F/57°C, but "
+    "it will not bring foods out of the danger zone quickly enough."
+)
+
+
+class TestTabularDetection:
+    def test_a_doneness_table_is_tabular(self):
+        assert Verifier(None)._is_tabular(DONENESS_TABLE)
+
+    def test_prose_with_many_temperatures_is_not(self):
+        """Counting figures alone called this page a table, and the row logic
+        then read two lines past a sentence into the next paragraph."""
+        assert not Verifier(None)._is_tabular(REHEAT_PROSE)
+
+    def test_a_page_with_few_figures_is_not(self):
+        assert not Verifier(None)._is_tabular(BECHAMEL)
+
+
+class TestNestedTableRows:
+    """The table is nested: a family header governs several rows, and no single
+    word of the subject picks the right one. Anchoring on the longest word read
+    the poultry row; anchoring on the rarest read the header, which is the same
+    row again. Both confirmed 74 °C for ground beef."""
+
+    def _scope(self, subject, aspect=""):
+        return Verifier(None)._scopes(Claim(subject, aspect, "1 g"), DONENESS_TABLE)[0]
+
+    def test_ground_beef_reads_the_beef_row(self):
+        scope = self._scope("ground beef", "cooked to internal temperature of")
+        assert "Beef, veal, lamb, pork" in scope
+        assert "71" in scope and "74" not in scope
+
+    def test_ground_turkey_reads_the_poultry_row(self):
+        scope = self._scope("ground turkey", "cooked to internal temperature of")
+        assert "Turkey, chicken" in scope and "74" in scope
+
+    def test_a_row_that_says_nothing_of_the_subject_is_not_a_candidate(self):
+        assert "Fish" not in self._scope("ground beef")
+
+    def test_the_true_figure_is_confirmed(self):
+        ok, why = Verifier(None)._match(
+            Claim("ground beef", "cooked to internal temperature of", "71°C"),
+            DONENESS_TABLE)
+        assert ok, why
+
+    def test_the_neighbouring_rows_figure_is_a_contradiction(self):
+        """The Q1 case: 74 °C is the ground-POULTRY line. Confirming it for
+        beef is manufactured evidence."""
+        ok, why = Verifier(None)._match(
+            Claim("ground beef", "cooked to internal temperature of", "74°C"),
+            DONENESS_TABLE)
+        assert not ok
+        assert why.startswith("differs"), why
+
+
+class TestProseScopes:
+    def test_the_aspect_picks_the_sentence(self):
+        """Two sentences of one page speak about reheating and give different
+        figures: 74 °C "to at least", 57 °C on a steam table. The subject alone
+        holds both — and calling that ambiguous is correct and useless."""
+        ok, why = Verifier(None)._match(
+            Claim("reheated foods", "reheated to at least", "74°C"), REHEAT_PROSE)
+        assert ok, why
+
+    def test_the_other_rule_of_the_same_page_still_reads_its_own_figure(self):
+        ok, why = Verifier(None)._match(
+            Claim("reheated foods", "held on a steam table above", "57°C"), REHEAT_PROSE)
+        assert ok, why
+
+    def test_a_figure_the_page_does_not_give_is_a_contradiction(self):
+        ok, why = Verifier(None)._match(
+            Claim("reheated foods", "reheated to at least", "63°C"), REHEAT_PROSE)
+        assert not ok and why.startswith("differs"), why
+
+    def test_scopes_are_ordered_tightest_first(self):
+        scopes = Verifier(None)._scopes(
+            Claim("reheated foods", "reheated to at least", "74°C"), REHEAT_PROSE)
+        assert len(scopes) >= 2
+        assert len(scopes[0]) <= len(scopes[-1])
+
+    def test_ambiguity_is_still_declared_when_the_scope_really_holds_two(self):
+        """The guard is not weakened, only aimed: a sentence that genuinely
+        gives two temperatures for one subject is ambiguous, and saying so is
+        the correct answer."""
+        text = ("Chill the custard: bring it to 84°C, then hold it at 60°C "
+                "before service.")
+        ok, why = Verifier(None)._match(Claim("custard", "bring it to", "84°C"), text)
+        assert not ok
+        assert "ambiguous" in why, why
