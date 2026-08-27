@@ -31,6 +31,14 @@ def index_for(domain: str) -> str:
     return "entity_embedding_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)
 
 
+def page_label_for(domain: str) -> str:
+    return label_for(domain) + "_pages"
+
+
+def page_index_for(domain: str) -> str:
+    return index_for(domain) + "_pages"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dim", type=int, default=1024)
@@ -68,13 +76,39 @@ def main() -> int:
                 f"CREATE FULLTEXT INDEX entity_text_{re.sub(r'[^A-Za-z0-9_]', '_', d)} "
                 f"IF NOT EXISTS FOR (n:{lbl}) ON EACH [n.label, n.text_excerpt, n.passage] "
                 f"OPTIONS {{indexConfig: {{`fulltext.analyzer`: 'standard-folding'}}}}")
-            print(f"  {d}: etichettati, indice {idx} creato "
+            # --- the evidence lane -------------------------------------
+            # A domain's own index still holds concepts and pages together, and
+            # concepts outnumber pages ten to one: measured on canon_library,
+            # 133,382 against 12,880. Candidate generation is a fixed budget, so
+            # the page that states the fact never reaches it — 28 of 32
+            # grounding failures were pages absent even from the top 60. Give
+            # the page layer its own indexes and it competes for its own slots.
+            plbl, pidx = page_label_for(d), page_index_for(d)
+            ptagged = s.run(
+                f"MATCH (n:Entity {{domain: $d}}) "
+                f"WHERE n.extraction_method = 'page' AND NOT n:{plbl} "
+                f"CALL (n) {{ SET n:Page, n:{plbl} }} IN TRANSACTIONS OF 5000 ROWS "
+                f"RETURN count(*) AS c", d=d).single()
+            s.run(
+                f"CREATE VECTOR INDEX {pidx} IF NOT EXISTS FOR (n:{plbl}) "
+                f"ON (n.embedding) OPTIONS {{indexConfig: {{"
+                f"`vector.dimensions`: {args.dim}, "
+                f"`vector.similarity_function`: 'cosine'}}}}")
+            s.run(
+                f"CREATE FULLTEXT INDEX entity_text_"
+                f"{re.sub(r'[^A-Za-z0-9_]', '_', d)}_pages "
+                f"IF NOT EXISTS FOR (n:{plbl}) ON EACH [n.label, n.text_excerpt, n.passage] "
+                f"OPTIONS {{indexConfig: {{`fulltext.analyzer`: 'standard-folding'}}}}")
+            print(f"  {d}: etichettati, indice {idx} creato; "
+                  f"corsia pagine {pidx} ({ptagged['c'] if ptagged else 0} nuove etichette) "
                   f"({time.perf_counter() - t0:.1f}s)", flush=True)
 
         for d in domains:
+            safe = re.sub(r'[^A-Za-z0-9_]', '_', d)
             s.run(f"CALL db.awaitIndex('{index_for(d)}', 3600)")
-            s.run(f"CALL db.awaitIndex('entity_text_"
-                  f"{re.sub(r'[^A-Za-z0-9_]', '_', d)}', 3600)")
+            s.run(f"CALL db.awaitIndex('entity_text_{safe}', 3600)")
+            s.run(f"CALL db.awaitIndex('{page_index_for(d)}', 3600)")
+            s.run(f"CALL db.awaitIndex('entity_text_{safe}_pages', 3600)")
         states = {r["name"]: r["state"] for r in s.run(
             "SHOW INDEXES YIELD name, state WHERE name STARTS WITH 'entity_' "
             "RETURN name, state")}

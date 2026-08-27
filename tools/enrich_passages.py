@@ -39,6 +39,10 @@ from graphify_ent.loader import Neo4jLoader
 _PAGES = re.compile(r"(\d+)\s*-\s*(\d+)")
 DEFAULT_WIDTH = 1200
 
+#: Separator announcing borrowed text. Visible in any serialized context, so a
+#: reader (and the verifier) can tell which page a sentence really came from.
+OVERLAP_MARK = "\n[segue da p. {page}] "
+
 _cache: dict[str, list[str]] = {}
 
 
@@ -145,6 +149,20 @@ def widen(evidence: str, source: str, width: int) -> str:
     return chunk.strip()
 
 
+def overlap_passage(page_text: str, next_text: str, width: int, next_page: int) -> str:
+    """`page_text` plus the head of the following page, marked as borrowed.
+
+    Built from the source text every run rather than appended to what is
+    stored, so running the pass twice writes the same value — the alternative
+    grows a passage without bound and nobody notices until a context blows up.
+    """
+    base = (page_text or "").strip()
+    tail = re.sub(r"\s+", " ", next_text or "").strip()[: max(0, width)]
+    if not tail or width <= 0:
+        return base
+    return base + OVERLAP_MARK.format(page=next_page) + tail
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", type=Path, default=Path("../pilot"))
@@ -157,6 +175,13 @@ def main() -> int:
     ap.add_argument("--page-width", type=int, default=6000,
                     help="page nodes carry their whole page, not a window")
     ap.add_argument("--link", action="store_true", help="also build APPEARS_ON edges")
+    ap.add_argument("--overlap", type=int, default=0,
+                    help="characters of the NEXT page appended to each page node "
+                         "(0 = off). A recipe does not stop at the page break: "
+                         "measured, 4 of 32 grounding failures were quotes that "
+                         "straddle two pages, and no single page node contains "
+                         "them. The borrowed text is marked and page_lo/page_hi "
+                         "are left alone, so provenance still names one page.")
     ap.add_argument("--passage-methods", nargs="*", default=["page", "native"],
                     help="extraction_method values that identify the passage layer")
     ap.add_argument("--checkpoints", type=Path, nargs="*",
@@ -178,7 +203,8 @@ def main() -> int:
     print(f"pagine vere note per {len(truth):,} nodi (dai checkpoint di estrazione)")
     loader = Neo4jLoader()
     stats = {"submitted": 0, "applied": 0, "unapplied": 0, "widened": 0, "fallback": 0, "no_pages": 0, "no_book": 0,
-             "scanned": 0, "edges": 0, "page_corrected": 0, "page_model_kept": 0}
+             "scanned": 0, "edges": 0, "page_corrected": 0, "page_model_kept": 0,
+             "overlapped": 0}
     t0 = time.perf_counter()
 
     with loader._session() as s:
@@ -222,7 +248,18 @@ def main() -> int:
                 source = "\n".join(texts[lo - 1:hi])
                 if (r["m"] or "") in args.passage_methods and r["m"] == "page":
                     # Built deterministically by build_pages.py, already
-                    # carrying its whole page. Nothing to widen.
+                    # carrying its whole page. Nothing to widen — but the page
+                    # break is arbitrary and a quote can straddle it, so
+                    # optionally carry the head of the next page as well.
+                    if not args.overlap:
+                        continue
+                    nxt = texts[hi] if hi < len(texts) else ""
+                    passage = overlap_passage(source, nxt, args.overlap, hi + 1)
+                    if OVERLAP_MARK.format(page=hi + 1) not in passage:
+                        continue                      # last page of the book
+                    stats["overlapped"] += 1
+                    updates.append({"id": r["id"], "domain": r["domain"],
+                                    "p": passage, "lo": pg[0], "hi": pg[1]})
                     continue
                 # A page node's job IS the page: giving it a 1,200-character
                 # window around its own quote left ~3,300 characters of every

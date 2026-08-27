@@ -45,6 +45,17 @@ DEADLOCK_RETRIES = 5
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.cypher")
 _VALID_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_SHARED_VECTOR_INDEX = re.compile(
+    r"CREATE\s+VECTOR\s+INDEX\s+entity_embedding\b", re.IGNORECASE
+)
+
+#: `extraction_method` of the deterministic page layer (`tools/build_pages.py`).
+#: Retrieval gives these nodes their own indexes — the evidence lane — because
+#: measured on the sixteen-book corpus concept nodes outnumber them ten to one
+#: and take every candidate slot: in 28 of 32 grounding failures the page that
+#: holds the answer was absent even from the top 60.
+PAGE_METHOD = "page"
+PAGE_LABEL = "Page"
 
 
 # ------------------------------------------------------------- sanitization
@@ -212,10 +223,35 @@ class Neo4jLoader:
         ]
         applied = []
         with self._session() as s:
+            per_domain = self._per_domain_vector_indexes(s)
             for stmt in statements:
+                # Once a graph has per-domain vector indexes, the shared one is
+                # a second copy of every vector in the database and nothing
+                # queries it. Recreating it here is not harmless: building an
+                # HNSW over ~150k vectors alongside the per-domain ones is what
+                # ran the container out of memory (exit 137). The schema still
+                # creates it on a graph that has no per-domain index, so a
+                # fresh install keeps working — it just stops coming back from
+                # the dead on every load of an established graph.
+                if per_domain and _SHARED_VECTOR_INDEX.search(stmt):
+                    applied.append("skipped (per-domain indexes exist): " + stmt[:40])
+                    continue
                 s.run(stmt)
                 applied.append(stmt.split("\n", 1)[0][:60])
         return applied
+
+    @staticmethod
+    def _per_domain_vector_indexes(session) -> set[str]:
+        try:
+            return {
+                r["name"]
+                for r in session.run(
+                    "SHOW INDEXES YIELD name, type WHERE type = 'VECTOR' AND "
+                    "name STARTS WITH 'entity_embedding_' RETURN name"
+                )
+            }
+        except Exception:
+            return set()
 
     def list_constraints(self) -> list[str]:
         with self._session() as s:
@@ -290,7 +326,7 @@ class Neo4jLoader:
         t0 = time.perf_counter()
         with self._session() as s:
             for batch in batched(iter_nodes(source), NODE_BATCH):
-                rows_by_label: dict[str, list[dict]] = {}
+                rows_by_label: dict[tuple[str, bool], list[dict]] = {}
                 for node in batch:
                     nid = node.get("id")
                     if not nid:
@@ -303,7 +339,13 @@ class Neo4jLoader:
                     props["domain"] = domain or props.get("domain") or "default"
                     props["ingested_at"] = ingested_at
                     label = safe_label(str(node.get("file_type", "Entity")).capitalize())
-                    rows_by_label.setdefault(label, []).append(props)
+                    # Page nodes are indexed apart from concept nodes, so the
+                    # marker has to be applied at write time — exactly like the
+                    # domain label, and for the same reason: applied once by a
+                    # build script and never again by the loader, a later load
+                    # is invisible to the lane that was built for it.
+                    is_page = props.get("extraction_method") == PAGE_METHOD
+                    rows_by_label.setdefault((label, is_page), []).append(props)
 
                 # The domain marker label is what the per-domain vector and
                 # text indexes are built on, so a node loaded without it is
@@ -312,10 +354,21 @@ class Neo4jLoader:
                 # because the label was applied once when the indexes were
                 # built and never again by the loader.
                 domain_label = ("D_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)) if domain else ""
-                for label, rows in rows_by_label.items():
+                for (label, is_page), rows in rows_by_label.items():
                     if dry_run:
                         stats.nodes_written += len(rows)
                         continue
+                    labels = f"n:{label}"
+                    if domain_label:
+                        labels += f", n:{domain_label}"
+                    if is_page:
+                        # `:Page` names the layer; `D_<domain>_pages` is what
+                        # the per-domain page indexes are actually built on,
+                        # because Neo4j indexes one label and the lane must not
+                        # mix corpora — the shared index taught that lesson.
+                        labels += f", n:{PAGE_LABEL}"
+                        if domain_label:
+                            labels += f", n:{domain_label}_pages"
                     # `Entity` carries the constraint and every index; the
                     # file_type label is additive so type filters stay cheap.
                     # Identity is (id, domain), never id alone. Two corpora
@@ -329,9 +382,8 @@ class Neo4jLoader:
                         s,
                         f"UNWIND $rows AS row "
                         f"MERGE (n:Entity {{id: row.id, domain: row.domain}}) "
-                        f"SET n += row, n:{label}"
-                        + (f", n:{domain_label} " if domain_label else " ")
-                        + f"RETURN count(n)",
+                        f"SET n += row, {labels} "
+                        f"RETURN count(n)",
                         rows=rows,
                     )
         stats.nodes_seconds = time.perf_counter() - t0

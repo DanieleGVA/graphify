@@ -38,7 +38,9 @@ __all__ = [
     "STRONG_FULLTEXT",
     "balance_by_method",
     "MIN_METHOD_SHARE",
+    "PAGE_LANE",
     "RESULT_WINDOW",
+    "evidence_lane_enabled",
     "Hit",
     "RetrievalResult",
     "HybridRetriever",
@@ -170,6 +172,25 @@ LEXICAL_PROBE = 60
 #: How many results a caller is assumed to actually read. Balancing applies to
 #: this head of the list only; everything below keeps pure fused order.
 RESULT_WINDOW = 10
+
+#: Index-name suffix of the evidence lane — the page layer's own vector and
+#: fulltext indexes, built by `tools/build_domain_indexes.py`.
+PAGE_LANE = "_pages"
+
+#: The window balance below shares out the *results*; by then the damage is
+#: done, because a page absent from the candidates cannot be balanced into the
+#: window. Measured on the sixteen-book corpus: of 32 grounding failures, 28
+#: were pages that never entered the candidate set at all — 90-100% of it was
+#: concept nodes — and restricting retrieval to pages alone recovered 12 of 16
+#: sampled. So the share is enforced where candidates are *generated*: each
+#: lane queries its own index and RRF fuses the four ranked lists.
+#:
+#: `ENTERPRIPHY_EVIDENCE_LANE=0` turns it off for ablation. Off is also what a
+#: graph without page indexes gets, automatically: the lane is skipped when the
+#: index does not exist, never silently redirected to the shared one.
+def evidence_lane_enabled() -> bool:
+    return os.environ.get("ENTERPRIPHY_EVIDENCE_LANE", "1") != "0"
+
 
 #: Minimum share of that window guaranteed to each extraction method present.
 #: A graph can hold facts extracted in several ways at once — page-sized
@@ -403,7 +424,7 @@ class HybridRetriever:
     #: round trip per process rather than one per query.
     _domain_indexes: dict | None = None
 
-    def _domain_index(self, domain: str | None) -> str:
+    def _load_index_names(self) -> set[str]:
         if HybridRetriever._domain_indexes is None:
             try:
                 with self.loader._session() as s:
@@ -413,33 +434,59 @@ class HybridRetriever:
                             "'entity_' RETURN name")}
             except Exception:
                 HybridRetriever._domain_indexes = set()
+        return HybridRetriever._domain_indexes
+
+    def _domain_index(self, domain: str | None, lane: str = "") -> str:
+        """Vector index for `domain` in `lane`, or "" when the lane has none.
+
+        The empty string is deliberate: a missing page index means the graph
+        has no evidence lane, and falling back to the domain-wide index would
+        make the lane a duplicate of the one it is supposed to complement.
+        """
+        names = self._load_index_names()
         if not domain:
             return "entity_embedding"
-        if HybridRetriever._domain_indexes is None:
-            try:
-                with self.loader._session() as s:
-                    HybridRetriever._domain_indexes = {
-                        r["name"] for r in s.run(
-                            "SHOW INDEXES YIELD name WHERE name STARTS WITH "
-                            "'entity_' RETURN name")}
-            except Exception:
-                HybridRetriever._domain_indexes = set()
-        name = "entity_embedding_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)
-        return name if name in HybridRetriever._domain_indexes else "entity_embedding"
+        name = "entity_embedding_" + re.sub(r"[^A-Za-z0-9_]", "_", domain) + lane
+        if name in names:
+            return name
+        return "" if lane else "entity_embedding"
 
-    def _text_index(self, domain: str | None) -> str:
+    def _text_index(self, domain: str | None, lane: str = "") -> str:
         """Per-domain text index when one exists, for the same reason the
         vector one exists: the shared index is cut to its best candidates
         before the domain filter can apply."""
+        names = self._load_index_names()
         if not domain:
             return "entity_text"
-        if HybridRetriever._domain_indexes is None:
-            self._domain_index(domain)          # populates the cache
-        name = "entity_text_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)
-        return name if name in (HybridRetriever._domain_indexes or ()) else "entity_text"
+        name = "entity_text_" + re.sub(r"[^A-Za-z0-9_]", "_", domain) + lane
+        if name in names:
+            return name
+        return "" if lane else "entity_text"
+
+    def _merged_vector_indexes(self, lane: str = "") -> list[str]:
+        """Every domain's vector index for one lane.
+
+        A domain-less query fans out over these instead of hitting a shared
+        index — there is none, by design: it held a second copy of every vector
+        and was what ran the database out of memory.
+        """
+        names = sorted(n for n in self._load_index_names()
+                       if n.startswith("entity_embedding_"))
+        return [n for n in names
+                if n.endswith(PAGE_LANE) == (lane == PAGE_LANE)]
+
+    def lanes(self, domain: str | None) -> tuple[str, ...]:
+        """Which lanes this query can use: always the domain-wide one, plus
+        the page lane when the graph has indexes for it and it is enabled."""
+        if not evidence_lane_enabled():
+            return ("",)
+        has_pages = (self._domain_index(domain, PAGE_LANE)
+                     or (domain is None and self._merged_vector_indexes(PAGE_LANE)))
+        return ("", PAGE_LANE) if has_pages else ("",)
 
     def vector_search(
-        self, embedding: list[float], top_k: int = DEFAULT_TOP_K, domain: str | None = None
+        self, embedding: list[float], top_k: int = DEFAULT_TOP_K,
+        domain: str | None = None, lane: str = "",
     ) -> list[tuple[str, float]]:
         """Nearest neighbours inside one domain.
 
@@ -456,7 +503,9 @@ class HybridRetriever:
         # 435 ms and lost a verification, against 33 ms and none when each had
         # its own. Falls back to the shared index where a per-domain one has
         # not been built.
-        index = self._domain_index(domain)
+        index = self._domain_index(domain, lane)
+        if not index:
+            return []
         cypher = (
             f"CALL db.index.vector.queryNodes('{index}', $k, $v) "
             "YIELD node, score "
@@ -471,8 +520,7 @@ class HybridRetriever:
                     # was what ran the database out of memory. A domain-less
                     # query therefore asks each domain's index and merges —
                     # two round trips instead of one, and no vector stored twice.
-                    known = sorted(HybridRetriever._domain_indexes or ())
-                    known = [i for i in known if i.startswith("entity_embedding_")]
+                    known = self._merged_vector_indexes(lane)
                     if known:
                         merged: list[tuple[str, float]] = []
                         for idx_name in known:
@@ -507,7 +555,8 @@ class HybridRetriever:
                 raise
 
     def _lexical_evidence(self, query_text: str, domain: str | None, top_k: int,
-                          must: str = "") -> tuple[list[tuple[str, float]], float]:
+                          must: str = "",
+                          lane: str = "") -> tuple[list[tuple[str, float]], float]:
         """Candidates that literally contain most of the query, and how much.
 
         One round trip. The term counting happens in the database, so what
@@ -521,7 +570,9 @@ class HybridRetriever:
         instead of refused. One passage containing most of what was asked is
         evidence; one passage containing one word of it is not.
         """
-        index = self._text_index(domain)
+        index = self._text_index(domain, lane)
+        if not index:
+            return [], 0.0
         terms = sorted({w.lower() for w in re.findall(r"[\w\u00c0-\u017f]{3,}", query_text)}
                        - _FUNCTION_WORDS)
         if not terms:
@@ -587,10 +638,13 @@ class HybridRetriever:
 
     def fulltext_search(
         self, text: str, top_k: int = DEFAULT_TOP_K, domain: str | None = None,
-        require_all: bool = False, require_terms: int = 0,
+        require_all: bool = False, require_terms: int = 0, lane: str = "",
     ) -> list[tuple[str, float]]:
+        index = self._text_index(domain, lane)
+        if not index:
+            return []
         cypher = (
-            f"CALL db.index.fulltext.queryNodes('{self._text_index(domain)}', $q) "
+            f"CALL db.index.fulltext.queryNodes('{index}', $q) "
             "YIELD node, score "
             "WHERE ($domain IS NULL OR node.domain = $domain) "
             + self._validity_clause("node")
@@ -695,6 +749,15 @@ class HybridRetriever:
         # the caller has already paid for the encoder before learning whether it
         # was needed; handing retrieval the means to encode lets it decide.
         # Measured on verification queries: 21.7 ms -> 5.9 ms.
+        # Which lanes this graph offers. Two lanes mean two ranked lists per
+        # channel instead of one, fused by the same RRF: the page layer stops
+        # competing with ten times its number of concept nodes for the same
+        # candidate slots, and starts competing only with itself.
+        lanes = self.lanes(domain)
+        page_lane = PAGE_LANE in lanes
+        if page_lane:
+            channel_counts["evidence_lane"] = 1
+
         lazy = embedding is None and embed_fn is not None
         if fast_path and "fulltext" in channels:
             # Require every term. That a single node contains all of them is
@@ -714,16 +777,32 @@ class HybridRetriever:
             lexical_coverage = covered
             if covered < MIN_TERM_COVERAGE:
                 probe = []
-            if probe:
-                channel_counts["term_coverage"] = round(covered, 2)
-                best_fulltext = max(s for _, s in probe)
-                if True:
+            # The evidence lane probes the page index separately. On this path
+            # it is the whole point: the corpus literally contains the phrase,
+            # and what settles the claim is the PAGE carrying it — which the
+            # domain-wide probe rarely returns, because concept nodes fill it.
+            page_probe: list[tuple[str, float]] = []
+            if page_lane:
+                page_probe, page_covered = self._lexical_evidence(
+                    query_text, domain, top_k, must, lane=PAGE_LANE)
+                if page_covered < MIN_TERM_COVERAGE:
+                    page_probe = []
+                else:
+                    lexical_coverage = max(lexical_coverage, page_covered)
+                    channel_counts["term_coverage_pages"] = round(page_covered, 2)
+            if probe or page_probe:
+                channel_counts["term_coverage"] = round(lexical_coverage, 2)
+                best_fulltext = max(s for _, s in probe + page_probe)
+                if probe:
                     ranked["fulltext:0"] = [i for i, _ in probe]
-                    channel_counts["fulltext"] = len(probe)
-                    channel_counts["fast_path"] = 1
-                    embedding = None
-                    channels = tuple(c for c in channels if c != "vector")
-                    variants = variants[:1]
+                if page_probe:
+                    ranked["fulltext:pages"] = [i for i, _ in page_probe]
+                    channel_counts["fulltext_pages"] = len(page_probe)
+                channel_counts["fulltext"] = len(probe)
+                channel_counts["fast_path"] = 1
+                embedding = None
+                channels = tuple(c for c in channels if c != "vector")
+                variants = variants[:1]
 
         if "vector" in channels and embedding is None and lazy:
             embedding = embed_fn(query_text)      # only now is it actually needed
@@ -732,13 +811,26 @@ class HybridRetriever:
             ranked["vector"] = [i for i, _ in vec]
             channel_counts["vector"] = len(vec)
             best_vector = max((s for _, s in vec), default=0.0)
+            if page_lane:
+                pvec = self.vector_search(embedding, top_k=top_k, domain=domain,
+                                          lane=PAGE_LANE)
+                if pvec:
+                    ranked["vector:pages"] = [i for i, _ in pvec]
+                    channel_counts["vector_pages"] = len(pvec)
+                    best_vector = max(best_vector, max(s for _, s in pvec))
 
-        if "fulltext" in channels and "fulltext:0" not in ranked:
+        if "fulltext" in channels and not channel_counts.get("fast_path"):
             for idx, variant in enumerate(variants):
                 ft = self.fulltext_search(variant, top_k=top_k, domain=domain)
                 if ft:
                     ranked[f"fulltext:{idx}"] = [i for i, _ in ft]
                     best_fulltext = max(best_fulltext, max(s for _, s in ft))
+                if page_lane:
+                    ftp = self.fulltext_search(variant, top_k=top_k, domain=domain,
+                                               lane=PAGE_LANE)
+                    if ftp:
+                        ranked[f"fulltext:pages:{idx}"] = [i for i, _ in ftp]
+                        best_fulltext = max(best_fulltext, max(s for _, s in ftp))
             channel_counts["fulltext"] = sum(
                 len(v) for k, v in ranked.items() if k.startswith("fulltext")
             )
