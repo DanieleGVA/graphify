@@ -108,11 +108,25 @@ dev = [
 package = true
 
 [tool.setuptools]
-packages = ["graphify", "graphify_ent"]
+# Subpackages are NOT implied by their parent: this list is exhaustive, and
+# leaving `graphify_ent.server` and `graphify_ent.recipes` out of it meant the
+# built wheel carried neither the MCP server nor the recipe layer. Verified by
+# building and reading the wheel, not by reading the list.
+packages = [
+    "graphify",
+    "graphify_ent",
+    "graphify_ent.recipes",
+    "graphify_ent.server",
+]
 include-package-data = false
 
 [tool.setuptools.package-data]
 graphify = ["skill.md", "skill-codex.md", "skill-opencode.md", "skill-aider.md", "skill-copilot.md", "skill-claw.md", "skill-windows.md", "skill-droid.md", "skill-trae.md", "skill-kiro.md", "skill-vscode.md", "skill-pi.md"]
+# Data the code reads at runtime. `schema.cypher` is applied before every load
+# and `ingredients.yaml` IS the recipe vocabulary — a wheel without them
+# imports cleanly and fails on first use, which is the worst way to fail.
+graphify_ent = ["schema.cypher"]
+"graphify_ent.recipes" = ["*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

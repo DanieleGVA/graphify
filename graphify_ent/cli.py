@@ -8,6 +8,8 @@ This is that doorway, deliberately thin: every subcommand is a few lines over
 
     graphify-ent query "Bechamel Sauce white roux" --domain pilot
     graphify-ent verify card.json --domain pilot
+    graphify-ent match cards.pdf --domain canon_library     # find the reference
+    graphify-ent parse cards.pdf                            # cards -> JSON, no DB
     graphify-ent health
     graphify-ent mcp          # stdio MCP server, for `claude mcp add`
 
@@ -45,6 +47,97 @@ def verify_card(service, card: dict, domain: str = "pilot") -> dict:
         "used_pdf": False,
         "findings": [f.as_dict() for f in findings],
     }
+
+
+def find_reference(service, card, registry, index, pool: int = 25) -> dict:
+    """Which page of the corpus backs this card, and why.
+
+    Retrieval finds the pages that TALK about the dish, the fingerprint ranks
+    and explains those few. The inverse — ranking every recipe page by
+    fingerprint — is implemented and measured NOT to work: on the export that
+    declares its reference work, the dishes whose book the corpus does not hold
+    scored higher than the true matches (evidence/T101). A card is a purchasing
+    spec of sub-recipes; a book page teaches from raw ingredients.
+    """
+    import re
+
+    from graphify_ent.recipes.ingredients import proportions
+    from graphify_ent.recipes.match import RecipeQuery, confidence, explain
+    from graphify_ent.recipes.techniques import techniques_in
+
+    resolved = card.resolved(registry)
+    title = re.sub(r"\([^)]*\)", " ", card.title.split(" - ")[0]).strip()
+    query = RecipeQuery(title=title, resolved=resolved,
+                        proportions=proportions(resolved),
+                        verbs=techniques_in(card.procedure),
+                        verb_seq=techniques_in(card.procedure, ordered=True))
+    names = [r.canonical.replace("_", " ") for r in resolved if r.quantified][:5]
+    res = service.retriever.query(" ".join([title] + names), embed_fn=service._embed,
+                                  domain=index.domain,
+                                  channels=("vector", "fulltext", "graph"),
+                                  hops=1, result_window=pool)
+    props = service.retriever.hydrate([h.node_id for h in res.hits[:pool]])
+    pages = []
+    for nid in [h.node_id for h in res.hits[:pool]]:
+        d = props.get(nid) or {}
+        if (d.get("extraction_method") or "") != "page":
+            continue
+        m = re.search(r"(\d+)", d.get("source_location") or "")
+        cand = index.page(d.get("source_file") or "", int(m.group(1))) if m else None
+        if cand is not None:
+            pages.append(cand)
+    ranked = index.rank(query, candidates=pages)[:3] if pages else []
+    return {
+        "card": card.title, "dish": title,
+        "verdict": "SUPPORTED" if ranked and not res.refused else "NOT_SUPPORTED",
+        "candidates": [m.as_dict() for m in ranked],
+        "confidence": confidence(ranked, query, index.idf),
+        "explain": explain(query, ranked[0], index.idf) if ranked else "",
+    }
+
+
+def cmd_parse(args) -> int:
+    """Cards to JSON. No database, so another project can read its own export
+    with this component's vocabulary and do whatever it likes with the rows."""
+    from graphify_ent.recipes.cards import load_cards
+    from graphify_ent.recipes.ingredients import Registry
+
+    reg = Registry.load(args.registry)
+    cards = load_cards(Path(args.cards))
+    out = [{**c.as_dict(),
+            "ingredients": [r.as_dict() for r in c.resolved(reg)],
+            "proportions": c.proportions(reg)} for c in cards]
+    payload = {"source": str(args.cards), "registry_version": reg.version,
+               "cards": out}
+    text = json.dumps(payload, indent=2, ensure_ascii=False)
+    if args.out:
+        Path(args.out).write_text(text, encoding="utf-8")
+        print(f"{len(out)} schede -> {args.out}")
+    else:
+        print(text)
+    return 0
+
+
+def cmd_match(args) -> int:
+    from graphify_ent.recipes.cards import load_cards
+    from graphify_ent.recipes.ingredients import Registry
+    from graphify_ent.recipes.match import CorpusIndex
+
+    service = _service()
+    reg = Registry.load(args.registry)
+    index = CorpusIndex.from_graph(service.loader, args.domain, registry=reg,
+                                   cache=Path(args.cache) if args.cache else None)
+    index.domain = args.domain
+    reports = [find_reference(service, c, reg, index, pool=args.pool)
+               for c in load_cards(Path(args.cards))]
+    if args.json:
+        print(json.dumps({"domain": args.domain, "reports": reports},
+                         indent=2, ensure_ascii=False))
+    else:
+        for r in reports:
+            print(f"\n### {r['card'][:70]}  [{r['verdict']}]")
+            print(r["explain"] or "  nessuna pagina del corpus parla di questo piatto")
+    return 0
 
 
 def cmd_query(args) -> int:
@@ -110,6 +203,22 @@ def main(argv: list[str] | None = None) -> int:
     v.add_argument("--out", help="write the JSON report here")
     v.add_argument("--json", action="store_true")
     v.set_defaults(fn=cmd_verify)
+
+    p = sub.add_parser("parse", help="read a recipe-card export into JSON (no database)")
+    p.add_argument("cards")
+    p.add_argument("--registry", default=None,
+                   help="ingredients.yaml alternativo (regola DOMAIN-AGNOSTIC)")
+    p.add_argument("--out")
+    p.set_defaults(fn=cmd_parse)
+
+    mt = sub.add_parser("match", help="find the corpus page that backs each card")
+    mt.add_argument("cards")
+    mt.add_argument("--domain", default="canon_library")
+    mt.add_argument("--registry", default=None)
+    mt.add_argument("--cache", default=None, help="dove tenere l'indice del corpus")
+    mt.add_argument("--pool", type=int, default=25)
+    mt.add_argument("--json", action="store_true")
+    mt.set_defaults(fn=cmd_match)
 
     h = sub.add_parser("health", help="connectivity and index state")
     h.set_defaults(fn=cmd_health)

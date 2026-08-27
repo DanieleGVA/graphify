@@ -119,3 +119,62 @@ class TestMcpFactory:
         payload = json.loads(out[0][0].text) if isinstance(out, tuple) else \
             json.loads(out[0].text)
         assert payload["verdict"] == "SUPPORTED"
+
+
+class TestWheelShipsWhatTheCodeReads:
+    """The component is only reusable if what it needs at runtime is inside the
+    package. It was not: setuptools does not imply a subpackage from its parent,
+    so the built wheel carried neither graphify_ent.server (the MCP server) nor
+    graphify_ent.recipes, nor schema.cypher, nor ingredients.yaml. A wheel like
+    that imports cleanly and fails on first real use.
+
+    Verified against pyproject rather than the filesystem: the filesystem is
+    always right in the checkout, which is exactly why the gap was invisible.
+    """
+
+    @staticmethod
+    def _pyproject() -> str:
+        from pathlib import Path
+        return (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+
+    def test_every_subpackage_is_declared(self):
+        src = self._pyproject()
+        for pkg in ("graphify_ent.recipes", "graphify_ent.server"):
+            assert f'"{pkg}"' in src, pkg
+
+    def test_runtime_data_files_are_declared(self):
+        src = self._pyproject()
+        assert 'graphify_ent = ["schema.cypher"]' in src
+        assert '"graphify_ent.recipes" = ["*.yaml"]' in src
+
+    def test_the_declared_data_files_exist(self):
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent / "graphify_ent"
+        assert (root / "schema.cypher").exists()
+        assert (root / "recipes" / "ingredients.yaml").exists()
+
+    def test_the_registry_loads_from_the_package_not_the_cwd(self):
+        """`Registry.load()` with no argument must find its YAML through the
+        package, or it works in the checkout and breaks everywhere else."""
+        from graphify_ent.recipes.ingredients import DEFAULT_REGISTRY
+        assert DEFAULT_REGISTRY.name == "ingredients.yaml"
+        assert DEFAULT_REGISTRY.parent.name == "recipes"
+
+
+class TestComponentCommands:
+    def test_the_cli_exposes_the_recipe_surface(self):
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "graphify_ent" / "cli.py").read_text()
+        for cmd in ('sub.add_parser("parse"', 'sub.add_parser("match"',
+                    'sub.add_parser("query"', 'sub.add_parser("verify"',
+                    'sub.add_parser("health"', 'sub.add_parser("mcp"'):
+            assert cmd in src, cmd
+
+    def test_parse_needs_no_database(self):
+        """The cheapest integration for a project that has no Neo4j: reading an
+        export with this component's vocabulary must not open a connection."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent / "graphify_ent" / "cli.py").read_text()
+        body = src[src.index("def cmd_parse"):src.index("def cmd_match")]
+        assert "_service()" not in body
+        assert "Neo4jLoader" not in body

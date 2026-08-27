@@ -156,9 +156,13 @@ class CorpusIndex:
     changes with either.
     """
 
-    def __init__(self, candidates: list[Candidate], idf: dict[str, float]):
+    def __init__(self, candidates: list[Candidate], idf: dict[str, float],
+                 domain: str | None = None):
         self.candidates = candidates
         self.idf = idf
+        #: Which corpus this index describes — callers that hold only the index
+        #: need it to query the same domain the IDF was built from.
+        self.domain = domain
         self._by_page = {(c.source_file, c.page): c for c in candidates}
 
     # -- construction ------------------------------------------------------
@@ -210,8 +214,9 @@ class CorpusIndex:
                 cands = [Candidate(c["f"], c["pg"], c["prop"],
                                    set(c["verbs"]), c["seq"], c.get("text", ""))
                          for c in data["candidates"]]
-                return cls(cands, data["idf"])
+                return cls(cands, data["idf"], domain)
         index = cls.from_pages(rows, reg)
+        index.domain = domain
         if cache:
             cache.parent.mkdir(parents=True, exist_ok=True)
             # `text` travels with the candidate: leaving it out silently turned
