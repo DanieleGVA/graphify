@@ -145,21 +145,27 @@ def embed_graph(
     # ~700/min to ~420/min as the scan grew, which is the quadratic signature.
     # `id` is unique-constrained, so seeking past the cursor is an index range
     # scan. Still resumable: a restart begins at the first unembedded id.
-    cursor = ""
+    # The cursor is (id, domain), not id: two corpora that share a source book
+    # hold the same ids, and a plain `id > cursor` skips the twin whenever a
+    # batch ends exactly on a shared id. Measured after the first multi-domain
+    # rebuild: 102 nodes silently left unembedded.
+    cursor_id, cursor_domain = "", ""
     while True:
         with loader._session() as s:
             rows = list(
                 s.run(
-                    "MATCH (n:Entity) WHERE n.id > $cursor AND n.embedding IS NULL "
+                    "MATCH (n:Entity) "
+                    "WHERE (n.id > $cid OR (n.id = $cid AND n.domain > $cdom)) "
+                    "  AND n.embedding IS NULL "
                     "RETURN n.id AS id, n.domain AS domain, n.label AS label, "
                     "n.text_excerpt AS text_excerpt, n.passage AS passage "
-                    "ORDER BY n.id LIMIT $k",
-                    k=batch_size, cursor=cursor,
+                    "ORDER BY n.id, n.domain LIMIT $k",
+                    k=batch_size, cid=cursor_id, cdom=cursor_domain,
                 )
             )
         if not rows:
             break
-        cursor = rows[-1]["id"]
+        cursor_id, cursor_domain = rows[-1]["id"], rows[-1]["domain"] or ""
 
         texts = [_node_text(r) for r in rows]
         t0 = time.perf_counter()

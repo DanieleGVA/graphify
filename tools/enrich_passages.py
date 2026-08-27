@@ -29,6 +29,7 @@ import argparse
 import json
 import re
 import time
+import unicodedata
 from pathlib import Path
 
 import fitz
@@ -164,11 +165,19 @@ def main() -> int:
     ap.add_argument("--json", type=Path, default=Path("../evidence/T72/enrich-stats.json"))
     args = ap.parse_args()
 
-    books = {p.name: p for p in args.corpus.glob("*.pdf")}
+    # Two failures lived in this one line. `*.pdf` skipped the four epub books
+    # entirely — every node of theirs counted as "no_book" and kept its short
+    # quote. And the keys were compared raw: macOS stores "Joël" decomposed
+    # while the graph holds it composed, so 949 Larousse page nodes never found
+    # their file. Both were silent: the run reported success either way.
+    books = {}
+    for pattern in ("*.pdf", "*.epub"):
+        for p in args.corpus.glob(pattern):
+            books[unicodedata.normalize("NFC", p.name)] = p
     truth = load_true_pages(args.checkpoints)
     print(f"pagine vere note per {len(truth):,} nodi (dai checkpoint di estrazione)")
     loader = Neo4jLoader()
-    stats = {"widened": 0, "fallback": 0, "no_pages": 0, "no_book": 0,
+    stats = {"submitted": 0, "applied": 0, "unapplied": 0, "widened": 0, "fallback": 0, "no_pages": 0, "no_book": 0,
              "scanned": 0, "edges": 0, "page_corrected": 0, "page_model_kept": 0}
     t0 = time.perf_counter()
 
@@ -190,7 +199,7 @@ def main() -> int:
             updates = []
             for r in rows:
                 stats["scanned"] += 1
-                pdf = books.get(r["f"] or "")
+                pdf = books.get(unicodedata.normalize("NFC", r["f"] or ""))
                 if not pdf:
                     stats["no_book"] += 1
                     continue
@@ -230,15 +239,28 @@ def main() -> int:
                     stats["widened"] += 1
                 else:
                     stats["fallback"] += 1
-                updates.append({"id": r["id"], "p": passage,
-                                "lo": pg[0], "hi": pg[1]})
+                # `domain` travels with the row: the write matches on
+                # (id, domain), and a row without it matches nothing — silently,
+                # which is how a run reported 50,937 widened passages while the
+                # database received 0.
+                updates.append({"id": r["id"], "domain": r["domain"],
+                                "p": passage, "lo": pg[0], "hi": pg[1]})
             if updates:
-                s.run("UNWIND $rows AS row "
-                      "MATCH (n:Entity {id: row.id, domain: row.domain}) "
-                      "SET n.passage = row.p, n.page_lo = row.lo, "
-                      "n.page_hi = row.hi, "
-                      "n.source_location = 'pages ' + toString(row.lo) + '-' "
-                      "+ toString(row.hi)", rows=updates)
+                applied = s.run(
+                    "UNWIND $rows AS row "
+                    "MATCH (n:Entity {id: row.id, domain: row.domain}) "
+                    "SET n.passage = row.p, n.page_lo = row.lo, "
+                    "n.page_hi = row.hi, "
+                    "n.source_location = 'pages ' + toString(row.lo) + '-' "
+                    "+ toString(row.hi) "
+                    "RETURN count(n) AS n", rows=updates).single()["n"]
+                # Submitted != applied is the silent data-loss path: a run once
+                # reported 50,937 widened passages while the database received
+                # none, because the rows lacked the key the MATCH needed.
+                stats["submitted"] += len(updates)
+                stats["applied"] += applied
+                if applied != len(updates):
+                    stats["unapplied"] += len(updates) - applied
             skip += args.batch
             print(f"  {min(skip, total):,}/{total:,}", flush=True)
 
@@ -265,6 +287,7 @@ def main() -> int:
             stats["edges"] = res["n"] if res else 0
 
     stats["seconds"] = round(time.perf_counter() - t0, 1)
+    stats["reconciled"] = stats["unapplied"] == 0
     loader.close()
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.json.write_text(json.dumps(stats, indent=2, ensure_ascii=False))

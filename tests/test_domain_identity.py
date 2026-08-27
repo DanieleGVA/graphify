@@ -39,6 +39,13 @@ class TestStatements:
     def test_vectors_are_written_per_domain(self):
         assert "MATCH (n:Entity {id: row.id, domain: row.domain})" in EMBED.read_text()
 
+    def test_embedding_cursor_advances_on_id_and_domain(self):
+        """A plain `id > cursor` skips the twin whenever a batch ends exactly
+        on an id two corpora share — measured: 102 nodes left unembedded."""
+        src = EMBED.read_text()
+        assert "n.id > $cid OR (n.id = $cid AND n.domain > $cdom)" in src
+        assert "ORDER BY n.id, n.domain" in src
+
     def test_constraint_is_composite(self):
         assert re.search(r"REQUIRE\s*\(n\.id,\s*n\.domain\)\s*IS UNIQUE",
                          SCHEMA.read_text())

@@ -83,7 +83,17 @@ DEFAULT_TOKEN_BUDGET = 4_000
 # BM25 still cannot arbitrate support: an out-of-corpus query scores high on a
 # rare word precisely BECAUSE it is rare. The lexical channel establishes
 # support only when a single node contains EVERY term of the query.
-MIN_VECTOR_SIMILARITY = 0.75
+MIN_VECTOR_SIMILARITY = 0.70
+
+#: Similarity above which the semantic channel decides on its own, because no
+#: measured out-of-corpus question reaches it (max 0.773 on the two-book graph,
+#: 0.788 on the twelve-book one). Between this and MIN_VECTOR_SIMILARITY the
+#: bands OVERLAP and similarity cannot settle the question — a large corpus
+#: always holds something vaguely close to anything. There the LEXICON decides:
+#: a real question about the corpus uses the corpus's words, and "kubernetes
+#: ingress controller tls" shares none of them however similar its vector
+#: looks. Calibrated in evidence/T90/refusal-calibration.json.
+STRONG_VECTOR = 0.80
 MIN_FULLTEXT_SCORE = 1.0       # lexical-only fallback; cannot separate on its own
 
 #: The explicit-refusal path. Returning this is a *correct* outcome, never a failure.
@@ -563,6 +573,10 @@ class HybridRetriever:
         channel_counts: dict[str, int] = {}
         best_vector = 0.0
         best_fulltext = 0.0
+        #: Fraction of the query's content terms found together in one passage.
+        #: Computed by the fast-path probe; also the tie-breaker in the overlap
+        #: band below, so it is initialised even when that probe is skipped.
+        lexical_coverage = 0.0
 
         # Fast path: probe the lexical channel first. If the corpus literally
         # contains the phrase, the answer is settled and the embedding — the
@@ -588,6 +602,7 @@ class HybridRetriever:
             # stock option vesting schedule" matched "stock" (the broth) and was
             # answered instead of refused.
             probe, covered = self._lexical_evidence(query_text, domain, top_k, must)
+            lexical_coverage = covered
             if covered < MIN_TERM_COVERAGE:
                 probe = []
             if probe:
@@ -627,7 +642,17 @@ class HybridRetriever:
             # The phrase is in the corpus; that IS the support.
             supported = True
         elif embedding is not None and "vector" in channels:
-            supported = best_vector >= min_vector_similarity
+            if best_vector >= STRONG_VECTOR:
+                supported = True
+            elif best_vector < min_vector_similarity:
+                supported = False
+            else:
+                # The overlap band: the vector cannot tell a real question from
+                # a foreign one, so require that the corpus contain the words
+                # actually asked about. Measured on the twelve-book graph: with
+                # similarity alone, 10 of 24 foreign questions were answered.
+                supported = lexical_coverage >= MIN_TERM_COVERAGE
+                channel_counts["decided_by"] = "lexicon"
         else:
             supported = best_fulltext >= min_fulltext_score
         if not supported:
