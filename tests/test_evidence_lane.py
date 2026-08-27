@@ -296,3 +296,29 @@ class TestBorrowedTextStaysOutOfTheVector:
         assert OVERLAP_MARK.startswith(OVERLAP_PREFIX)
         assert "OVERLAP_MARK" in ENRICH.read_text()
         assert 'OVERLAP_MARK = ' not in ENRICH.read_text()
+
+
+class TestFastPathOperatingPoint:
+    """The fast path skips the encoder when the corpus literally contains the
+    query's words. That was measured on two books, where full term coverage
+    meant one passage; on sixteen it means dozens. Measured both ways
+    (evidence/T99):
+
+        encoder skipped (default)   canon 95.5%   Q2 page recall 78.9%
+        encoder kept                canon 87.0%   Q2 page recall 86.8%
+
+    Neither dominates — the benchmarks ask different things — so the choice is
+    exposed instead of decided in secret."""
+
+    def test_the_default_still_skips_the_encoder(self):
+        src = (ROOT / "graphify_ent" / "retrieval.py").read_text()
+        assert 'os.environ.get("ENTERPRIPHY_FAST_PATH_KEEPS_VECTOR") != "1"' in src
+        assert "channels = tuple(c for c in channels if c != \"vector\")" in src
+
+    def test_both_measurements_are_recorded_next_to_the_switch(self):
+        """A knob whose trade-off lives only in a commit message is a knob
+        nobody can set responsibly."""
+        src = (ROOT / "graphify_ent" / "retrieval.py").read_text()
+        block = src[src.index("ENTERPRIPHY_FAST_PATH_KEEPS_VECTOR") - 1200:]
+        for figure in ("95.5%", "87.0%", "78.9%", "86.8%"):
+            assert figure in block, figure

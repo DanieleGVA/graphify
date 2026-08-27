@@ -882,9 +882,35 @@ class HybridRetriever:
                 ranked["fulltext:0"] = [i for i, _ in probe]
                 channel_counts["fulltext"] = len(probe)
                 channel_counts["fast_path"] = 1
-                embedding = None
-                channels = tuple(c for c in channels if c != "vector")
                 variants = variants[:1]
+                # The fast path settles SUPPORT — the corpus contains the
+                # phrase — and used to also skip the encoder, which is the most
+                # expensive step. That was measured on a two-book corpus, where
+                # full term coverage meant one passage. On sixteen books it
+                # means dozens: coverage 1.0 now says the words are present, not
+                # that the lexical order discriminates. Measured, all five
+                # remaining grounding failures took this path, and the page that
+                # answered sat at vector rank 1 in a channel that never ran.
+                #
+                # The optimisation was worth it when a query cost 400 ms against
+                # an 800 ms gate. It costs 33 ms now. So support still comes
+                # from the lexicon, and the encoder runs anyway.
+                # Measured both ways on the sixteen-book graph (evidence/T99):
+                #
+                #   encoder skipped (default)   canon 95.5%   Q2 page recall 78.9%
+                #   encoder kept                canon 87.0%   Q2 page recall 86.8%
+                #
+                # Neither dominates, because the two benchmarks ask different
+                # things: canon looks for a passage the caller can already
+                # quote, which is a lexical problem, and the semantic candidates
+                # crowd it out; Q2 asks questions in natural language, which is
+                # the opposite. So this is an operating point, not a bug, and it
+                # is exposed rather than decided in secret:
+                # ENTERPRIPHY_FAST_PATH_KEEPS_VECTOR=1 trades eight points of
+                # documentary grounding for eight points of question recall.
+                if os.environ.get("ENTERPRIPHY_FAST_PATH_KEEPS_VECTOR") != "1":
+                    embedding = None
+                    channels = tuple(c for c in channels if c != "vector")
 
         if "vector" in channels and embedding is None and lazy:
             embedding = embed_fn(query_text)      # only now is it actually needed
