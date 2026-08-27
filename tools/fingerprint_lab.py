@@ -139,11 +139,39 @@ def proportions(grams: dict[str, float]) -> dict[str, float]:
     return {k: v / tot for k, v in grams.items()} if tot else {}
 
 
-def s_ingredients(q: dict[str, float], c: dict[str, float]) -> float:
-    """Histogram intersection of the proportion vectors: scale-invariant, in
-    [0,1], and it rewards agreement on the RATIOS, not just co-presence —
-    which is exactly criterion 1 as stated."""
-    return sum(min(q.get(k, 0.0), c.get(k, 0.0)) for k in set(q) | set(c))
+def build_idf(pages: list[dict]) -> dict[str, float]:
+    """Rarity of each canonical ingredient across the corpus's recipe pages.
+
+    Identity lives in rarity, not in mass. The first scoring weighted each
+    ingredient by its share of the recipe — and a wrong page beat the true
+    reference 67 to 50 with 62 of its 67 points coming from water+sugar+cream
+    (present in 843/1,088/683 of 1,578 pages), while marsala (18 pages),
+    mascarpone (20) and coffee liqueur (12) — the tiramisù's actual signature —
+    contributed crumbs because they are 3-13% of the cake's mass. Water is 28%
+    of the recipe and says nothing; marsala is 3% and says almost everything.
+    """
+    import math
+    df: dict[str, int] = {k: 0 for k in LEXICON}
+    for p in pages:
+        for k in p["prop"]:
+            df[k] += 1
+    n = max(len(pages), 1)
+    return {k: math.log(n / max(df[k], 1)) for k in LEXICON}
+
+
+def s_ingredients(q: dict[str, float], c: dict[str, float],
+                  idf: dict[str, float] | None = None) -> float:
+    """Proportion agreement, weighted by ingredient rarity when an idf is
+    given. Normalised by the query's own weighted mass so the score stays in
+    [0,1] and remains scale-invariant. Measured on the Tiramisù: ingredient-
+    only rank 49 -> 3 of 1,578 with the idf, and the two pages above the true
+    reference are a marsala-mascarpone cream and a simple syrup."""
+    if idf is None:
+        return sum(min(q.get(k, 0.0), c.get(k, 0.0)) for k in set(q) | set(c))
+    num = sum(idf.get(k, 0.0) * min(q.get(k, 0.0), c.get(k, 0.0))
+              for k in set(q) | set(c))
+    den = sum(idf.get(k, 0.0) * v for k, v in q.items())
+    return num / den if den else 0.0
 
 
 def parse_verbs(text: str) -> set[str]:
@@ -196,11 +224,12 @@ def main() -> int:
                     pages.append({"book": f.name, "page": i + 1, "text": t,
                                   "prop": proportions(g), "verbs": parse_verbs(t)})
     print(f"\ncandidati: {len(pages)} pagine-ricetta su 16 libri")
+    idf = build_idf(pages)
 
     def rank(title: str, qp: dict, qv: set, weights=(0.60, 0.25, 0.15)):
         scored = []
         for p in pages:
-            si = s_ingredients(qp, p["prop"])
+            si = s_ingredients(qp, p["prop"], idf)
             sp = s_procedure(qv, p["verbs"])
             st = s_title(title, p["text"])
             scored.append((weights[0]*si + weights[1]*sp + weights[2]*st,
