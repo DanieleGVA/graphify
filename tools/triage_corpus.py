@@ -107,18 +107,27 @@ def main() -> int:
             if s is not None:
                 scores.append(s)
         legibility = statistics.median(scores) if scores else 0
-        cpp = chars / max(len([i for i in idx if i < n]), 1)
+        sampled = len([i for i in idx if i < n])
+        cpp = chars / max(sampled, 1)
+        # Density is measured over the pages that HAVE prose, not over every
+        # page: an art-directed cookbook can be a third photographs, and
+        # dividing its text by the plate pages made a perfectly legible book
+        # (100/100, 1,443 chars per text page) look like an unOCR'd scan.
+        cpp_prose = (chars / len(prose)) if prose else 0
 
+        no_text = not prose or cpp_prose < 250
         admitted = (legibility >= args.min_legibility
                     and prose_total >= args.min_prose_pages
-                    and cpp >= 150)
+                    and not no_text)
         reason = ("ok" if admitted else
-                  "nessun testo (serve OCR)" if cpp < 150 else
+                  "nessun testo (serve OCR)" if no_text else
                   f"testo corrotto (leggibilità {legibility})" if legibility < args.min_legibility
                   else "troppo poca prosa")
         out.append({"file": f.name, "format": f.suffix.lower().lstrip("."),
                     "pages": n, "prose_pages_est": prose_total,
-                    "chars_per_page": round(cpp), "legibility_median": legibility,
+                    "chars_per_page": round(cpp),
+                    "chars_per_prose_page": round(cpp_prose),
+                    "legibility_median": legibility,
                     "legibility_scores": scores, "admitted": admitted, "reason": reason,
                     "judge_seconds": round(time.perf_counter() - t0, 1)})
         print(f"{f.name[:48]:<50} {n:>5} {prose_total:>6} {cpp:>8.0f} {legibility:>6}  "
@@ -128,7 +137,8 @@ def main() -> int:
     args.json.write_text(json.dumps(
         {"corpus": str(args.corpus), "judge": args.model,
          "gate": {"min_legibility": args.min_legibility,
-                  "min_prose_pages": args.min_prose_pages, "min_chars_per_page": 150},
+                  "min_prose_pages": args.min_prose_pages,
+                  "min_chars_per_prose_page": 250},
          "books": out}, indent=1, ensure_ascii=False))
     ok = sum(1 for b in out if b["admitted"])
     print(f"\nammessi {ok}/{len(out)} -> {args.json}")
