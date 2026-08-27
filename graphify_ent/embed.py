@@ -151,7 +151,8 @@ def embed_graph(
             rows = list(
                 s.run(
                     "MATCH (n:Entity) WHERE n.id > $cursor AND n.embedding IS NULL "
-                    "RETURN n.id AS id, n.label AS label, n.text_excerpt AS text_excerpt, n.passage AS passage "
+                    "RETURN n.id AS id, n.domain AS domain, n.label AS label, "
+                    "n.text_excerpt AS text_excerpt, n.passage AS passage "
                     "ORDER BY n.id LIMIT $k",
                     k=batch_size, cursor=cursor,
                 )
@@ -165,12 +166,16 @@ def embed_graph(
         vectors = embedder.encode(texts)
         stats.per_batch_seconds.append(time.perf_counter() - t0)
 
-        payload = [{"id": r["id"], "v": v} for r, v in zip(rows, vectors)]
+        # Match on (id, domain): the same id can exist in two corpora that
+        # share a source book, and writing by id alone puts one corpus's vector
+        # on the other's node.
+        payload = [{"id": r["id"], "domain": r["domain"], "v": v}
+                   for r, v in zip(rows, vectors)]
         with loader._session() as s:
             s.execute_write(
                 lambda tx: tx.run(
                     "UNWIND $rows AS row "
-                    "MATCH (n:Entity {id: row.id}) "
+                    "MATCH (n:Entity {id: row.id, domain: row.domain}) "
                     "CALL db.create.setNodeVectorProperty(n, 'embedding', row.v)",
                     rows=payload,
                 ).consume()

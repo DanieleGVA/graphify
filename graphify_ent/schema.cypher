@@ -4,8 +4,11 @@
 
 // --- Constraints -----------------------------------------------------------
 // Uniqueness on id is what makes MERGE an index lookup instead of a label scan.
+// Identity is (id, domain): two corpora may share a source book, and ids are
+// namespaced per (book, slice), so `id` alone lets the second corpus MERGE onto
+// the first and move its nodes into the wrong domain.
 CREATE CONSTRAINT entity_id IF NOT EXISTS
-  FOR (n:Entity) REQUIRE n.id IS UNIQUE;
+  FOR (n:Entity) REQUIRE (n.id, n.domain) IS UNIQUE;
 
 CREATE CONSTRAINT concept_id IF NOT EXISTS
   FOR (c:Concept) REQUIRE c.id IS UNIQUE;

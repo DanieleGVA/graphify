@@ -297,8 +297,10 @@ class Neo4jLoader:
                         continue
                     props = sanitize_props(node)
                     props["id"] = nid
-                    if domain:
-                        props["domain"] = domain
+                    # The MERGE key needs `domain` present even when the
+                    # caller passes none: a missing property makes the pattern
+                    # unmatchable and every row would insert a duplicate.
+                    props["domain"] = domain or props.get("domain") or "default"
                     props["ingested_at"] = ingested_at
                     label = safe_label(str(node.get("file_type", "Entity")).capitalize())
                     rows_by_label.setdefault(label, []).append(props)
@@ -309,10 +311,17 @@ class Neo4jLoader:
                         continue
                     # `Entity` carries the constraint and every index; the
                     # file_type label is additive so type filters stay cheap.
+                    # Identity is (id, domain), never id alone. Two corpora
+                    # may legitimately share a source book — the twelve-book
+                    # library contains both pilot books — and ids are
+                    # namespaced per (book, slice), so on `id` alone the second
+                    # load MERGEs onto the first and silently moves 9,550 nodes
+                    # from one domain into the other. Measured: pilot went from
+                    # 53,393 nodes to 25,376 before the guard caught it.
                     stats.nodes_written += self._run_with_retry(
                         s,
                         f"UNWIND $rows AS row "
-                        f"MERGE (n:Entity {{id: row.id}}) "
+                        f"MERGE (n:Entity {{id: row.id, domain: row.domain}}) "
                         f"SET n += row, n:{label} "
                         f"RETURN count(n)",
                         rows=rows,
@@ -334,7 +343,7 @@ class Neo4jLoader:
                     props.pop("target", None)
                     rel = safe_rel(str(edge.get("relation", "RELATED_TO")))
                     by_rel.setdefault(rel, []).append(
-                        {"src": src, "tgt": tgt, "props": props}
+                        {"src": src, "tgt": tgt, "props": props, "domain": domain}
                     )
 
                 for rel, rows in by_rel.items():
@@ -345,8 +354,8 @@ class Neo4jLoader:
                     applied = self._run_with_retry(
                         s,
                         f"UNWIND $rows AS row "
-                        f"MATCH (a:Entity {{id: row.src}}) "
-                        f"MATCH (b:Entity {{id: row.tgt}}) "
+                        f"MATCH (a:Entity {{id: row.src, domain: row.domain}}) "
+                        f"MATCH (b:Entity {{id: row.tgt, domain: row.domain}}) "
                         f"MERGE (a)-[r:{rel}]->(b) "
                         f"SET r += row.props "
                         f"RETURN count(r)",

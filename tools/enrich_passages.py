@@ -147,6 +147,10 @@ def widen(evidence: str, source: str, width: int) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--corpus", type=Path, default=Path("../pilot"))
+    ap.add_argument("--domain", default=None,
+                    help="arricchisce SOLO questo dominio. Senza filtro, in un grafo "
+                         "multi-corpus i concetti di uno finiscono collegati alle "
+                         "pagine dell'altro: stesso libro, dominio diverso.")
     ap.add_argument("--width", type=int, default=DEFAULT_WIDTH)
     ap.add_argument("--batch", type=int, default=2000)
     ap.add_argument("--page-width", type=int, default=6000,
@@ -169,15 +173,18 @@ def main() -> int:
     t0 = time.perf_counter()
 
     with loader._session() as s:
-        total = s.run("MATCH (n:Entity) RETURN count(*) AS n").single()["n"]
+        total = s.run("MATCH (n:Entity) WHERE $domain IS NULL OR n.domain = $domain "
+                      "RETURN count(*) AS n", domain=args.domain).single()["n"]
         print(f"nodi da arricchire: {total:,}", flush=True)
         skip = 0
         while True:
             rows = list(s.run(
-                "MATCH (n:Entity) RETURN n.id AS id, n.source_file AS f, "
+                "MATCH (n:Entity) WHERE $domain IS NULL OR n.domain = $domain "
+                "RETURN n.id AS id, n.domain AS domain, n.source_file AS f, "
                 "n.source_location AS loc, n.evidence AS ev, "
                 "n.extraction_method AS m "
-                "ORDER BY n.id SKIP $skip LIMIT $lim", skip=skip, lim=args.batch))
+                "ORDER BY n.id SKIP $skip LIMIT $lim",
+                skip=skip, lim=args.batch, domain=args.domain))
             if not rows:
                 break
             updates = []
@@ -226,7 +233,8 @@ def main() -> int:
                 updates.append({"id": r["id"], "p": passage,
                                 "lo": pg[0], "hi": pg[1]})
             if updates:
-                s.run("UNWIND $rows AS row MATCH (n:Entity {id: row.id}) "
+                s.run("UNWIND $rows AS row "
+                      "MATCH (n:Entity {id: row.id, domain: row.domain}) "
                       "SET n.passage = row.p, n.page_lo = row.lo, "
                       "n.page_hi = row.hi, "
                       "n.source_location = 'pages ' + toString(row.lo) + '-' "
@@ -246,12 +254,14 @@ def main() -> int:
             # extraction and is 'page' for build_pages.py. Ask the graph.
             res = s.run("""
                 MATCH (c:Entity) WHERE NOT c.extraction_method IN $passage
+                  AND ($domain IS NULL OR c.domain = $domain)
                 MATCH (p:Entity) WHERE p.extraction_method IN $passage
                   AND p.source_file = c.source_file
+                  AND p.domain = c.domain
                   AND p.page_lo <= c.page_hi AND c.page_lo <= p.page_hi
                 MERGE (c)-[e:APPEARS_ON]->(p)
                 RETURN count(e) AS n
-            """, passage=args.passage_methods).single()
+            """, passage=args.passage_methods, domain=args.domain).single()
             stats["edges"] = res["n"] if res else 0
 
     stats["seconds"] = round(time.perf_counter() - t0, 1)
