@@ -21,6 +21,7 @@ from graphify_ent.retrieval import (
     serialize_context,
     verify_evidence_binding,
     balance_by_method,
+    dedupe_by_page,
 )
 
 NEO4J_URI = os.environ.get("NEO4J_URI")
@@ -328,3 +329,69 @@ class TestLexicalSupport:
         would drop candidates that were about to be promoted into it."""
         from graphify_ent.retrieval import HYDRATE_FACTOR
         assert HYDRATE_FACTOR >= 2
+
+
+class TestDedupeByPage:
+    """A window is a budget of places to look, and the same page taken four
+    times is one place. Measured on the golden set before this existed: ten
+    slots held four nodes from page 961 and two from page 101, while the page
+    that answered sat below the cut."""
+
+    @staticmethod
+    def _hit(i, page, method="llm", book="book.pdf"):
+        return Hit(node_id=f"n{i}", score=1000.0 - i, label=f"l{i}",
+                   source_file=book, source_location=f"pages {page}-{page}",
+                   extraction_method=method)
+
+    def test_repeats_of_one_page_leave_the_head(self):
+        hits = [self._hit(i, 961) for i in range(4)] + [self._hit(9, 101)]
+        out = dedupe_by_page(hits, window=10)
+        assert [h.node_id for h in out[:2]] == ["n0", "n9"]
+
+    def test_nothing_is_dropped(self):
+        hits = [self._hit(i, 961) for i in range(4)] + [self._hit(9, 101)]
+        out = dedupe_by_page(hits, window=10)
+        assert {h.node_id for h in out} == {h.node_id for h in hits}
+        assert len(out) == len(hits)
+
+    def test_the_same_page_of_another_book_is_another_place(self):
+        hits = [self._hit(0, 12, book="a.pdf"), self._hit(1, 12, book="b.pdf")]
+        out = dedupe_by_page(hits, window=10)
+        assert [h.node_id for h in out] == ["n0", "n1"]
+
+    def test_the_page_node_takes_the_slot_from_its_own_concept(self):
+        """The page node carries the whole page and the concept a window
+        inside it, so keeping the concept throws text away — measured, two
+        grounded records of the canon benchmark."""
+        hits = [self._hit(0, 279, "llm"), self._hit(1, 279, "page")]
+        out = dedupe_by_page(hits, window=10)
+        assert out[0].node_id == "n1" and out[0].extraction_method == "page"
+        assert out[-1].node_id == "n0"
+
+    def test_the_swap_does_not_promote_over_another_page(self):
+        hits = [self._hit(0, 279, "llm"), self._hit(1, 300, "page"),
+                self._hit(2, 279, "page")]
+        out = dedupe_by_page(hits, window=10)
+        assert [h.source_location for h in out[:2]] == ["pages 279-279", "pages 300-300"]
+
+    def test_a_concept_never_displaces_its_page(self):
+        hits = [self._hit(0, 279, "page"), self._hit(1, 279, "llm")]
+        out = dedupe_by_page(hits, window=10)
+        assert out[0].node_id == "n0"
+
+    def test_beyond_the_window_order_is_untouched(self):
+        hits = [self._hit(i, i) for i in range(20)]
+        assert dedupe_by_page(hits, window=10) == hits
+
+    def test_empty_and_degenerate_inputs(self):
+        assert dedupe_by_page([]) == []
+        h = [self._hit(0, 1)]
+        assert dedupe_by_page(h, window=0) == h
+        assert dedupe_by_page(h, keep=0) == h
+
+    def test_it_is_ablatable(self, monkeypatch):
+        """Every structural change to retrieval must be switchable off, or an
+        ablation cannot overrule the design."""
+        import graphify_ent.retrieval as R
+        src = (R.__file__ and open(R.__file__).read()) or ""
+        assert 'os.environ.get("ENTERPRIPHY_PAGE_DEDUPE", "1") != "0"' in src

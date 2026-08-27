@@ -87,9 +87,16 @@ DEFAULT_TOKEN_BUDGET = 4_000
 # support only when a single node contains EVERY term of the query.
 MIN_VECTOR_SIMILARITY = 0.75
 
-#: Similarity above which the semantic channel decides on its own, because no
-#: measured out-of-corpus question reaches it (max 0.773 on the two-book graph,
-#: 0.788 on the twelve-book one). Between this and MIN_VECTOR_SIMILARITY the
+#: Similarity above which the semantic channel decides on its own. It was set
+#: where no measured out-of-corpus question reached — max 0.773 on the two-book
+#: graph, 0.788 on the twelve-book one — and that is no longer true: recalibrated
+#: across both lanes on the sixteen-book graph (evidence/T99), out-of-corpus
+#: reaches 0.800 on pilot and 0.796 on canon_library. A larger corpus always
+#: holds something vaguely close to anything, so the headroom shrinks as books
+#: are added and this number cannot be left to age. It costs nothing today only
+#: because LEXICAL_FLOOR_IN_BAND is 0.0, which makes the band support anything
+#: the floor lets through; the moment that floor rises, this one has to be
+#: re-measured with it. Between this and MIN_VECTOR_SIMILARITY the
 #: bands OVERLAP and similarity cannot settle the question — a large corpus
 #: always holds something vaguely close to anything. There the LEXICON decides:
 #: a real question about the corpus uses the corpus's words, and "kubernetes
@@ -231,6 +238,48 @@ def balance_by_method(
         else:
             tail.append(h)
     return head + tail
+
+def dedupe_by_page(hits: list["Hit"], window: int = RESULT_WINDOW,
+                   keep: int = 1) -> list["Hit"]:
+    """At most `keep` hits per source page in the head of the list.
+
+    A window is a budget of places to look, and the same page taken four times
+    is one place. Measured on the golden set: a ten-slot window held four nodes
+    from page 961 and two from page 101, so six of ten slots said the same
+    thing twice while the page that answered sat below the cut. Nothing is
+    dropped — the surplus moves down — so a caller reading further still sees
+    everything.
+
+    Which of the duplicates survives is not a detail. A page node carries the
+    whole page; a concept node from that page carries a window inside it, so
+    the page node subsumes its rivals and keeping the other one instead throws
+    text away. Measured: keeping the best-scored regardless cost two grounded
+    records on the canon benchmark, all of them pages that had been displaced
+    by their own concepts.
+    """
+    if window <= 0 or keep <= 0 or not hits:
+        return hits
+    counts: dict[tuple[str, str], int] = {}
+    at: dict[tuple[str, str], int] = {}
+    head: list[Hit] = []
+    tail: list[Hit] = []
+    for h in hits:
+        key = (h.source_file or "", h.source_location or h.node_id)
+        if len(head) < window and counts.get(key, 0) < keep:
+            at[key] = len(head)
+            head.append(h)
+            counts[key] = counts.get(key, 0) + 1
+        elif (key in at and h.extraction_method == "page"
+              and head[at[key]].extraction_method != "page"):
+            # Same page, wider text: take the slot, and the narrower node goes
+            # down with the rest. The slot keeps its rank — this is a swap
+            # inside one page, never a promotion over another page's hit.
+            tail.append(head[at[key]])
+            head[at[key]] = h
+        else:
+            tail.append(h)
+    return head + tail
+
 
 #: Ranking multipliers — provenance is part of the score, per architecture §2.
 CONFIDENCE_WEIGHT = {"EXTRACTED": 1.0, "INFERRED": 0.75, "AMBIGUOUS": 0.5}
@@ -804,27 +853,33 @@ class HybridRetriever:
             lexical_coverage = covered
             if covered < MIN_TERM_COVERAGE:
                 probe = []
-            # The evidence lane probes the page index separately. On this path
-            # it is the whole point: the corpus literally contains the phrase,
-            # and what settles the claim is the PAGE carrying it — which the
-            # domain-wide probe rarely returns, because concept nodes fill it.
-            page_probe: list[tuple[str, float]] = []
-            if page_lane:
-                page_probe, page_covered = self._lexical_evidence(
-                    query_text, domain, top_k, must, lane=PAGE_LANE)
-                if page_covered < MIN_TERM_COVERAGE:
-                    page_probe = []
-                else:
-                    lexical_coverage = max(lexical_coverage, page_covered)
-                    channel_counts["term_coverage_pages"] = round(page_covered, 2)
-            if probe or page_probe:
+            if probe:
+                # The evidence lane probes the page index too, and here it is
+                # the whole point: the corpus literally contains the phrase, and
+                # what settles the claim is the PAGE carrying it — which the
+                # domain-wide probe rarely returns, because concept nodes fill
+                # it.
+                #
+                # What the page probe must NOT do is decide that this path was
+                # taken. Letting it trigger the fast path on its own cost 14
+                # points of cross-language page recall (64.3% -> 50.0%,
+                # evidence/T99/context-recall): the fast path skips the
+                # encoder, and a question asked in French about an English book
+                # shares no words with the page that answers it — the semantic
+                # channel is the only way across. A French page containing the
+                # French words is not evidence that the encoder is unnecessary.
+                page_probe: list[tuple[str, float]] = []
+                if page_lane:
+                    page_probe, page_covered = self._lexical_evidence(
+                        query_text, domain, top_k, must, lane=PAGE_LANE)
+                    if page_covered >= MIN_TERM_COVERAGE and page_probe:
+                        lexical_coverage = max(lexical_coverage, page_covered)
+                        channel_counts["term_coverage_pages"] = round(page_covered, 2)
+                        ranked["fulltext:pages"] = [i for i, _ in page_probe]
+                        channel_counts["fulltext_pages"] = len(page_probe)
                 channel_counts["term_coverage"] = round(lexical_coverage, 2)
                 best_fulltext = max(s for _, s in probe + page_probe)
-                if probe:
-                    ranked["fulltext:0"] = [i for i, _ in probe]
-                if page_probe:
-                    ranked["fulltext:pages"] = [i for i, _ in page_probe]
-                    channel_counts["fulltext_pages"] = len(page_probe)
+                ranked["fulltext:0"] = [i for i, _ in probe]
                 channel_counts["fulltext"] = len(probe)
                 channel_counts["fast_path"] = 1
                 embedding = None
@@ -943,6 +998,8 @@ class HybridRetriever:
             hits.append(hit)
 
         hits.sort(key=lambda h: -h.score)
+        if os.environ.get("ENTERPRIPHY_PAGE_DEDUPE", "1") != "0":
+            hits = dedupe_by_page(hits, window=result_window)
         if balance_methods:
             hits = balance_by_method(hits, window=result_window)
 
