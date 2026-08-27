@@ -269,3 +269,30 @@ class TestAgainstLiveGraph:
         props = live.hydrate([h.node_id for h in res.hits[:10]])
         pages = [p for p in props.values() if p["extraction_method"] == "page"]
         assert pages, "no page reached the window"
+
+
+class TestBorrowedTextStaysOutOfTheVector:
+    """The overlap exists so a quote straddling a page break can be MATCHED.
+    Embedding it would blur two pages into one vector — and would make a node's
+    embedding depend on whether the overlap pass had been run, so the same book
+    would encode differently on two graphs."""
+
+    def test_the_embedder_cuts_at_the_marker(self):
+        from graphify_ent.embed import _node_text
+        from graphify_ent.loader import OVERLAP_MARK
+        body = "the page's own text" + OVERLAP_MARK.format(page=8) + "the next page"
+        out = _node_text({"label": "L", "passage": body})
+        assert "the page's own text" in out
+        assert "the next page" not in out
+
+    def test_a_passage_without_a_marker_is_untouched(self):
+        from graphify_ent.embed import _node_text
+        out = _node_text({"label": "L", "passage": "plain page text"})
+        assert "plain page text" in out
+
+    def test_the_tool_and_the_package_share_one_marker(self):
+        """Two copies of a data convention drift, and the drift is silent."""
+        from graphify_ent.loader import OVERLAP_MARK, OVERLAP_PREFIX
+        assert OVERLAP_MARK.startswith(OVERLAP_PREFIX)
+        assert "OVERLAP_MARK" in ENRICH.read_text()
+        assert 'OVERLAP_MARK = ' not in ENRICH.read_text()

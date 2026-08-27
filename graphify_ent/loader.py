@@ -57,6 +57,15 @@ _SHARED_VECTOR_INDEX = re.compile(
 PAGE_METHOD = "page"
 PAGE_LABEL = "Page"
 
+#: Separator a page node uses to announce text borrowed from the page after it
+#: (`tools/enrich_passages.py --overlap`). A recipe does not stop at the page
+#: break, and a quote that straddles one is in no single page node — measured,
+#: 4 of 32 grounding failures. The borrowed text is there to be MATCHED, never
+#: to be attributed: `page_lo`/`page_hi` still name one page, and the embedder
+#: cuts the passage here so a page's vector stays the page's own.
+OVERLAP_MARK = "\n[segue da p. {page}] "
+OVERLAP_PREFIX = "\n[segue da p."
+
 
 # ------------------------------------------------------------- sanitization
 

@@ -34,14 +34,11 @@ from pathlib import Path
 
 import fitz
 
-from graphify_ent.loader import Neo4jLoader
+from graphify_ent.loader import OVERLAP_MARK, Neo4jLoader
 
 _PAGES = re.compile(r"(\d+)\s*-\s*(\d+)")
 DEFAULT_WIDTH = 1200
 
-#: Separator announcing borrowed text. Visible in any serialized context, so a
-#: reader (and the verifier) can tell which page a sentence really came from.
-OVERLAP_MARK = "\n[segue da p. {page}] "
 
 _cache: dict[str, list[str]] = {}
 
