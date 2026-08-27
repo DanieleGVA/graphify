@@ -305,6 +305,13 @@ class Neo4jLoader:
                     label = safe_label(str(node.get("file_type", "Entity")).capitalize())
                     rows_by_label.setdefault(label, []).append(props)
 
+                # The domain marker label is what the per-domain vector and
+                # text indexes are built on, so a node loaded without it is
+                # invisible to semantic search — silently. Measured: 15,458
+                # nodes of four freshly loaded books answered nothing at all,
+                # because the label was applied once when the indexes were
+                # built and never again by the loader.
+                domain_label = ("D_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)) if domain else ""
                 for label, rows in rows_by_label.items():
                     if dry_run:
                         stats.nodes_written += len(rows)
@@ -322,8 +329,9 @@ class Neo4jLoader:
                         s,
                         f"UNWIND $rows AS row "
                         f"MERGE (n:Entity {{id: row.id, domain: row.domain}}) "
-                        f"SET n += row, n:{label} "
-                        f"RETURN count(n)",
+                        f"SET n += row, n:{label}"
+                        + (f", n:{domain_label} " if domain_label else " ")
+                        + f"RETURN count(n)",
                         rows=rows,
                     )
         stats.nodes_seconds = time.perf_counter() - t0

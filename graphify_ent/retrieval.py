@@ -404,6 +404,15 @@ class HybridRetriever:
     _domain_indexes: dict | None = None
 
     def _domain_index(self, domain: str | None) -> str:
+        if HybridRetriever._domain_indexes is None:
+            try:
+                with self.loader._session() as s:
+                    HybridRetriever._domain_indexes = {
+                        r["name"] for r in s.run(
+                            "SHOW INDEXES YIELD name WHERE name STARTS WITH "
+                            "'entity_' RETURN name")}
+            except Exception:
+                HybridRetriever._domain_indexes = set()
         if not domain:
             return "entity_embedding"
         if HybridRetriever._domain_indexes is None:
@@ -457,6 +466,22 @@ class HybridRetriever:
         )
         with self.loader._session() as s:
             try:
+                if domain is None and index == "entity_embedding":
+                    # No shared index: it duplicated every domain's vectors and
+                    # was what ran the database out of memory. A domain-less
+                    # query therefore asks each domain's index and merges —
+                    # two round trips instead of one, and no vector stored twice.
+                    known = sorted(HybridRetriever._domain_indexes or ())
+                    known = [i for i in known if i.startswith("entity_embedding_")]
+                    if known:
+                        merged: list[tuple[str, float]] = []
+                        for idx_name in known:
+                            q = cypher.replace(f"'{index}'", f"'{idx_name}'")
+                            merged += [(r["id"], r["score"])
+                                       for r in s.run(q, k=top_k, want=top_k,
+                                                      v=embedding, domain=None)]
+                        merged.sort(key=lambda kv: -kv[1])
+                        return merged[:top_k]
                 if domain is None or index != "entity_embedding":
                     return [(r["id"], r["score"])
                             for r in s.run(cypher, k=top_k, want=top_k, v=embedding,

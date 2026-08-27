@@ -192,7 +192,13 @@ def main() -> int:
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
 
     tasks = []
-    for pdf in sorted(args.corpus.glob("*.pdf")):
+    # PyMuPDF opens epub as readily as pdf, and the corpus holds both — but
+    # this glob asked only for PDFs, so six epub books entered the graph with
+    # their page layer and NO extracted facts at all. Nothing failed and the
+    # run reported success; the books were simply never seen.
+    sources = sorted(p for p in args.corpus.iterdir()
+                     if p.suffix.lower() in (".pdf", ".epub"))
+    for pdf in sources:
         for i, sl in enumerate(slice_pdf(pdf, CHAR_CAP)):
             tasks.append({"pdf": str(pdf), "index": i, "slice_obj": sl,
                           "key": f"{pdf.name}#{i}"})

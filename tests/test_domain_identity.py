@@ -46,6 +46,14 @@ class TestStatements:
         assert "n.id > $cid OR (n.id = $cid AND n.domain > $cdom)" in src
         assert "ORDER BY n.id, n.domain" in src
 
+    def test_loader_applies_the_domain_marker_label(self):
+        """The per-domain indexes are built on that label. A node loaded
+        without it is invisible to semantic search, silently — measured:
+        15,458 nodes of four freshly loaded books answered nothing."""
+        src = LOADER.read_text()
+        assert 'domain_label = ("D_" + re.sub(r"[^A-Za-z0-9_]", "_", domain))' in src
+        assert 'n:{domain_label}' in src
+
     def test_constraint_is_composite(self):
         assert re.search(r"REQUIRE\s*\(n\.id,\s*n\.domain\)\s*IS UNIQUE",
                          SCHEMA.read_text())

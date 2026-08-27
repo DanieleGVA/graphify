@@ -1,0 +1,9 @@
+{
+  "embedded": 15458,
+  "batches": 61,
+  "seconds": 993.06,
+  "nodes_per_s": 15.6,
+  "model": "BAAI/bge-m3",
+  "dim": 1024,
+  "cost_usd": 0.0
+}
