@@ -674,20 +674,47 @@ class HybridRetriever:
         ).replace("$as_of_default", "datetime()")
 
     # -- expansion ---------------------------------------------------------
-    def expand_graph(self, seed_ids: list[str], hops: int = 1, limit: int = 40) -> list[dict]:
-        """1–2 hop typed expansion, weighted by edge confidence."""
+    def expand_graph(self, seed_ids: list[str], hops: int = 1, limit: int = 40,
+                     domain: str | None = None) -> list[dict]:
+        """1–2 hop typed expansion, weighted by edge confidence.
+
+        Two things the first version got wrong, both measured on the sixteen-book
+        graph:
+
+        * **Identity.** Seeds were matched on `id` alone. Ids are namespaced per
+          (book, slice) and the library holds the pilot's own two books, so the
+          same id exists in two domains and the walk started from — and ended
+          on — nodes belonging to a corpus nobody asked about. Same failure as
+          the loader's, same fix: match on (id, domain).
+        * **Cost.** 639 ms per expansion — the whole of the p95, on a query
+          whose answer was already found. `WHERE ($domain IS NULL OR
+          s.domain = $domain)` is idiomatic everywhere else in this file, and
+          harmless there because an index call drives the plan; here it IS the
+          plan, and the disjunction makes it unusable: profiled, Neo4j fell
+          back to NodeByLabelScan over all 199,655 entities and expanded
+          426,945 relationships to return 40 neighbours. The predicate is
+          therefore built into the statement rather than passed as a parameter
+          — one hop, written as one hop, seeking on (id, domain).
+        """
         if not seed_ids or hops < 1:
             return []
+        hops = min(hops, 2)
+        pattern = "-[r]-" if hops == 1 else f"-[r*1..{hops}]-"
+        weight = ("coalesce(r.weight, 1.0)" if hops == 1
+                  else "reduce(w = 1.0, x IN r | w * coalesce(x.weight, 1.0))")
+        scope_s = " AND s.domain = $domain" if domain else ""
+        scope_n = " AND n.domain = $domain" if domain else ""
         cypher = (
-            f"MATCH (s:Entity) WHERE s.id IN $ids "
-            f"MATCH (s)-[r*1..{min(hops, 2)}]-(n:Entity) "
-            f"WHERE NOT n.id IN $ids "
+            f"MATCH (s:Entity) WHERE s.id IN $ids{scope_s} "
+            f"MATCH (s){pattern}(n:Entity) "
+            f"WHERE NOT n.id IN $ids{scope_n} "
             + self._validity_clause("n")
-            + " WITH n, reduce(w = 1.0, x IN r | w * coalesce(x.weight, 1.0)) AS w "
+            + f" WITH n, {weight} AS w "
             "RETURN DISTINCT n.id AS id, w ORDER BY w DESC LIMIT $limit"
         )
         with self.loader._session() as s:
-            return [dict(r) for r in s.run(cypher, ids=seed_ids, limit=limit)]
+            return [dict(r) for r in s.run(cypher, ids=seed_ids, limit=limit,
+                                           domain=domain)]
 
     # -- hydration ---------------------------------------------------------
     def hydrate(self, node_ids: list[str]) -> dict[str, dict]:
@@ -880,7 +907,7 @@ class HybridRetriever:
             channels = tuple(c for c in channels if c != "graph")
 
         if "graph" in channels and hops:
-            for row in self.expand_graph(seed_ids, hops=hops):
+            for row in self.expand_graph(seed_ids, hops=hops, domain=domain):
                 # Expansion contributes below any directly-retrieved seed.
                 fused.setdefault(row["id"], 0.0)
                 fused[row["id"]] += 0.5 / (RRF_K + seeds) * float(row.get("w") or 1.0)

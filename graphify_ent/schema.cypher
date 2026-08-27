@@ -13,6 +13,14 @@ CREATE CONSTRAINT entity_id IF NOT EXISTS
 CREATE CONSTRAINT concept_id IF NOT EXISTS
   FOR (c:Concept) REQUIRE c.id IS UNIQUE;
 
+// The composite constraint above cannot serve a lookup that knows only the id,
+// and retrieval is full of them: hydration takes the fused ids, expansion takes
+// the seed ids. Profiled without this index, `MATCH (n:Entity) WHERE n.id IN
+// $ids` planned as NodeByLabelScan — 199,655 nodes touched to return 30, 178 ms
+// on every single query, and 640 ms per graph expansion. Composite indexes are
+// not usable on a prefix here, so the single-property index has to exist too.
+CREATE INDEX entity_id_lookup IF NOT EXISTS FOR (n:Entity) ON (n.id);
+
 // --- Search indexes --------------------------------------------------------
 // `passage` is indexed alongside the short fields: without it lexical search
 // sees only a node's label and its ~32-character quote, so an exact phrase from
