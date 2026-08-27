@@ -9,9 +9,11 @@ from __future__ import annotations
 import pytest
 
 from graphify_ent.verify import (
+    CONFLICTED,
     CONTRADICTED,
     NOT_FOUND,
     SUPPORTED,
+    UNPARSED,
     Claim,
     Verifier,
     quantities,
@@ -283,30 +285,82 @@ class TestProseScopes:
         assert "ambiguous" in why, why
 
 
-class TestUnparsedFigureGuard:
-    """ADR-0004 Q4-A. Measured against the real corpus: "1 gal" is not in the
-    unit table, so the check fell through to a substring search and confirmed
-    the claim from the YIELD line ("Makes 1 gal/3.84 L") — a false SUPPORTED
-    for a milk quantity of 5 qt. A substring names no owner: a figure the
-    grammar cannot parse is refused, never guessed."""
+class TestUnparsedFigures:
+    """ADR-0004 Q4-A + Q3. A figure the grammar cannot read never falls
+    through to a substring search — that fall-through once confirmed "1 gal"
+    as a milk quantity off the YIELD line. Since Q3 landed, the refusal is
+    its own machine-detectable verdict."""
 
-    def test_the_yield_figure_no_longer_confirms_an_ingredient(self):
-        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "1 gal"))
-        assert f.verdict == NOT_FOUND
-        assert "unparsed figure" in f.detail
+    def test_an_unreadable_figure_is_its_own_verdict(self):
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "3 eggs"))
+        assert f.verdict == UNPARSED
+        assert "unparsed figure" in f.detail and "3 eggs" in f.detail
 
-    def test_the_refusal_names_the_figure_it_could_not_read(self):
-        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "17 qt"))
-        assert f.verdict == NOT_FOUND and "17 qt" in f.detail
-
-    def test_a_fraction_is_refused_not_substring_matched(self):
-        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "1/2 cup"))
-        assert f.verdict == NOT_FOUND and "unparsed figure" in f.detail
-
-    def test_a_parseable_figure_is_still_adjudicated(self):
-        assert _verifier(BECHAMEL).check(
-            Claim("Bechamel Sauce", "white roux", "454 g")).verdict == SUPPORTED
-
-    def test_a_digitless_claim_is_untouched_by_the_guard(self):
+    def test_a_digitless_claim_keeps_the_text_path(self):
         assert _verifier(BECHAMEL).check(
             Claim("Bechamel Sauce", "White Roux")).verdict == SUPPORTED
+
+
+class TestFactsChannel:
+    """ADR-0004 Q1/Q3: a claim with a readable figure is settled against
+    canonical facts — figures with declared owners — never raw page text.
+    Every case below was a wrong verdict of the substring era."""
+
+    def test_the_yield_no_longer_confirms_the_milk(self):
+        """THE defect: "1 gal" is on the page, but it belongs to Makes."""
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "1 gal"))
+        assert f.verdict == CONTRADICTED
+        assert "differs" in f.detail and "Milk" in f.evidence
+
+    def test_the_true_figure_is_supported_with_the_owning_row(self):
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "5 qt"))
+        assert f.verdict == SUPPORTED and "5 qt" in f.evidence
+
+    def test_us_volumes_can_finally_be_contradicted(self):
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "17 qt"))
+        assert f.verdict == CONTRADICTED
+
+    def test_a_fraction_is_read_as_a_half_not_its_denominator(self):
+        """"1/2 cup" once parsed as 2 cups (473 ml); it is 118 ml, and 118 ml
+        of milk against 4.7 l is a contradiction, not a coincidence."""
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "½ cup"))
+        assert f.verdict == CONTRADICTED
+
+    def test_the_rewrite_is_logged_never_silent(self):
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "1 gal"))
+        assert "3785" in f.normalized and "milk" in f.normalized
+        assert f.as_dict()["normalized"] == f.normalized
+
+    def test_the_glossary_reaches_an_italian_aspect(self):
+        """Q2: the 6.0 glossary is the ONE vocabulary — "latte" finds Milk
+        with no synonym map inside verify."""
+        v = Verifier(_Retriever([_doc(BECHAMEL)]), glossary={"milk": ["latte"]})
+        f = v.check(Claim("Bechamel Sauce", "quantità di latte", "4,8 L"))
+        assert f.verdict == SUPPORTED
+
+
+RAGU_A = "Ragu alla bolognese. Add whole milk 500 g and simmer gently for hours."
+RAGU_B = "Ragu, the Bologna way. The milk 800 g goes in before the tomato."
+
+
+class TestConflicted:
+    """ADR-0004 Q3: one document supports, another contradicts — both are
+    returned, cited, and never resolved by rank order. The old loop returned
+    the first SUPPORTED and silently discarded a recorded contradiction
+    (observed live: p348 differs, p379 misread)."""
+
+    def test_both_readings_are_returned_together(self):
+        f = _verifier(RAGU_A, RAGU_B).check(Claim("Ragu", "milk quantity", "500 g"))
+        assert f.verdict == CONFLICTED
+        assert f.conflict and {"for", "against"} <= set(f.conflict)
+        assert f.conflict["for"]["figure"] == "500 g"
+        assert f.conflict["against"]["figure"] == "800 g"
+
+    def test_rank_order_does_not_decide(self):
+        first = _verifier(RAGU_A, RAGU_B).check(Claim("Ragu", "milk quantity", "500 g"))
+        second = _verifier(RAGU_B, RAGU_A).check(Claim("Ragu", "milk quantity", "500 g"))
+        assert first.verdict == second.verdict == CONFLICTED
+
+    def test_agreeing_documents_do_not_conflict(self):
+        f = _verifier(RAGU_A, RAGU_A).check(Claim("Ragu", "milk quantity", "500 g"))
+        assert f.verdict == SUPPORTED and f.conflict is None

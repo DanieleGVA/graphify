@@ -33,12 +33,14 @@ def _service():
 def verify_card(service, card: dict, domain: str = "pilot") -> dict:
     """Adjudicate every claim on a card; returns the same report shape the
     T73/T74 harness writes, so downstream tooling reads one format."""
-    from graphify_ent.verify import CONTRADICTED, NOT_FOUND, SUPPORTED, Claim, Verifier
+    from graphify_ent.verify import (CONFLICTED, CONTRADICTED, NOT_FOUND,
+                                     SUPPORTED, UNPARSED, Claim, Verifier)
 
-    verifier = Verifier(service.retriever, embed_fn=service._embed, domain=domain)
+    verifier = Verifier(service.retriever, embed_fn=service._embed, domain=domain,
+                        glossary=getattr(service.retriever, "glossary", None))
     findings = verifier.check_all([Claim(**c) for c in card["claims"]])
     counts = {v: sum(1 for f in findings if f.verdict == v)
-              for v in (SUPPORTED, CONTRADICTED, NOT_FOUND)}
+              for v in (SUPPORTED, CONTRADICTED, NOT_FOUND, UNPARSED, CONFLICTED)}
     return {
         "card": card.get("title"),
         "claimed_reference": card.get("claimed_reference"),
@@ -167,7 +169,8 @@ def cmd_verify(args) -> int:
             print(f"{f['verdict']:<13} {what[:70]}")
         c = report["counts"]
         print(f"\n{c['SUPPORTED']} confermate · {c['CONTRADICTED']} smentite · "
-              f"{c['NOT_FOUND']} non trovate")
+              f"{c['NOT_FOUND']} non trovate · {c.get('UNPARSED', 0)} illeggibili · "
+              f"{c.get('CONFLICTED', 0)} in conflitto")
     return 0
 
 

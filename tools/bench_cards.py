@@ -5,8 +5,9 @@ One arm per run: point NEO4J_URI at the instance to test (7688 ENTERPRIPHY,
 7689 upstream) and pass --arm so the output says which architecture answered.
 Accuracy is scored against eval/cards/expected-T74.json, whose verdicts come
 from reading the source PDFs — never from either extraction. An expected
-NOT_SUPPORTED is satisfied by CONTRADICTED or NOT_FOUND: both mean "the graph
-did not confirm a claim the source does not make".
+NOT_SUPPORTED is satisfied by CONTRADICTED, NOT_FOUND, UNPARSED or CONFLICTED
+(ADR-0004 Q3): all mean "the graph did not confirm a claim the source does
+not make".
 """
 
 from __future__ import annotations

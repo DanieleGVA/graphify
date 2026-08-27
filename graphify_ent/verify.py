@@ -7,7 +7,8 @@ replace, so this module talks only to Neo4j. If a fact is not in the graph the
 answer is "not found", never "let me open the book" — an unsupported claim is a
 finding, not a reason to fall back.
 
-Three verdicts, and the distinction between the last two is the whole point:
+Five verdicts (ADR-0004 Q3), each machine-detectable — a doctrine state in a
+prose field cannot be asserted on:
 
   SUPPORTED    the source states this value for this subject
   CONTRADICTED the source states a DIFFERENT value for it — the useful case,
@@ -15,6 +16,18 @@ Three verdicts, and the distinction between the last two is the whole point:
                because the contradicting passage is the most similar one
   NOT_FOUND    the corpus does not speak to it. Reported plainly rather than
                resolved by picking the nearest passage.
+  UNPARSED     the claim carries a figure the grammar cannot read. Explicit
+               refusal — the substring fall-through that once confirmed
+               "1 gal" off a yield line is gone.
+  CONFLICTED   one document supports and another contradicts. Both are cited
+               and returned together, never resolved by rank order: the old
+               first-SUPPORTED-wins loop was the silent side-pick the
+               doctrine forbids.
+
+Claims that carry a parseable figure are settled against the canonical
+quantity facts (graphify_ent.facts, ADR-0004 Q1-B): every figure with its
+declared owner, derived once per node from the stored passage — not
+re-guessed per claim from raw text. Presence claims keep the lexical path.
 
 Every finding carries the passage it was decided from, with book and page, so a
 human can overrule it in one glance. Nothing here paraphrases the source.
@@ -27,11 +40,14 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Callable
 
-__all__ = ["Claim", "Finding", "Verifier", "SUPPORTED", "CONTRADICTED", "NOT_FOUND"]
+__all__ = ["Claim", "Finding", "Verifier", "SUPPORTED", "CONTRADICTED",
+           "NOT_FOUND", "UNPARSED", "CONFLICTED"]
 
 SUPPORTED = "SUPPORTED"
 CONTRADICTED = "CONTRADICTED"
 NOT_FOUND = "NOT_FOUND"
+UNPARSED = "UNPARSED"
+CONFLICTED = "CONFLICTED"
 
 #: Quantities as cookbooks write them: "454 g", "8 oz", "4.80 L", "1 lb 2 oz"
 #: — and temperatures, "165°F/74°C". Temperatures were absent until a card
@@ -84,6 +100,7 @@ def quantities(text: str) -> list[tuple[float, str]]:
 #: Words that carry no discriminating power in a recipe corpus — requiring
 #: them would reject good passages, counting them would inflate coverage.
 _WEAK = {"sauce", "cheese", "with", "into", "from", "that", "this", "quantity",
+         "quantita",
          "amount", "salsa", "formaggio", "and", "the", "for", "grated", "whole",
          "fresh", "made", "make", "used", "using", "serve", "served"}
 
@@ -143,16 +160,25 @@ class Finding:
     latency_ms: float = 0.0
     channel: str = ""
     candidates: list[str] = field(default_factory=list)
+    #: The claim as it was actually adjudicated ("aspect→['milk']; value
+    #: '1 gal'→3785 ml"). Zero silent rewrites: a reviewer can contest the
+    #: rewrite, not only the verdict.
+    normalized: str = ""
+    #: CONFLICTED only: both readings, each with its own citation.
+    conflict: dict | None = None
 
     def as_dict(self) -> dict:
-        return {
+        out = {
             "subject": self.claim.subject, "aspect": self.claim.aspect,
             "asserted": self.claim.value, "verdict": self.verdict,
             "detail": self.detail, "source_file": self.source_file,
             "source_location": self.source_location,
             "evidence": self.evidence, "latency_ms": round(self.latency_ms, 1),
-            "channel": self.channel,
+            "channel": self.channel, "normalized": self.normalized,
         }
+        if self.conflict is not None:
+            out["conflict"] = self.conflict
+        return out
 
 
 class Verifier:
@@ -160,11 +186,23 @@ class Verifier:
 
     def __init__(self, retriever, embed_fn: Callable[[str], list[float]] | None = None,
                  domain: str = "pilot", top: int = 10, tolerance: float = 0.10,
-                 aspect_coverage: float = 0.6):
+                 aspect_coverage: float = 0.6,
+                 glossary: dict[str, list[str]] | None = None):
         self.retriever = retriever
         self.embed_fn = embed_fn
         self.domain = domain
         self.top = top
+        #: The 6.0 language-variant glossary, the SAME object HybridRetriever
+        #: takes (ADR-0004 Q2) — verify carries no synonym map of its own.
+        #: term -> variants, indexed both ways: "latte" reaches "milk".
+        self._gloss: dict[str, set[str]] = {}
+        for term, alts in (glossary or {}).items():
+            fam = {norm(term), *(norm(a) for a in alts)}
+            for w in fam:
+                self._gloss.setdefault(w, set()).update(fam)
+        #: Facts are derived once per node and cached — the ADR's interim for
+        #: T60 materialization: same function, same results, no re-guessing.
+        self._fact_cache: dict[str, list] = {}
         #: Relative tolerance when comparing figures. Cookbooks round, and
         #: "454 g" against "1 lb" must not read as a contradiction.
         self.tolerance = tolerance
@@ -465,20 +503,159 @@ class Verifier:
                            + ", ".join(f"{fv:g} {fu}" for fv, fu in found[:4]))
         return False, ""
 
+    # -- canonical facts channel ------------------------------------------
+    def _facts_for(self, doc: dict) -> list:
+        from graphify_ent.facts import derive
+
+        key = doc.get("id") or f"{doc.get('source_file')}|{doc.get('source_location')}"
+        if key not in self._fact_cache:
+            self._fact_cache[key] = derive(
+                doc.get("passage") or doc.get("text_excerpt") or "")
+        return self._fact_cache[key]
+
+    def _variants(self, tok: str) -> set[str]:
+        return self._gloss.get(tok, {tok})
+
+    def _covers(self, tokens: list[str], anchor: str) -> float:
+        body = norm(anchor)
+        hit = sum(1 for t in tokens if any(v in body for v in self._variants(t)))
+        return hit / len(tokens) if tokens else 0.0
+
+    def _agrees(self, cqs, fact) -> bool:
+        for q in cqs:
+            if q.unit != fact.unit_base:
+                continue
+            tol = (TEMP_TOLERANCE_C if q.unit == "c"
+                   else self.tolerance * max(q.hi, 1e-9))
+            if fact.value_lo - tol <= q.hi and q.lo <= fact.value_hi + tol:
+                return True
+        return False
+
+    def _address(self, claim: Claim, cqs, toks: list[str], facts: list):
+        """The facts of one document that speak to this claim, decided.
+
+        The ASPECT names which figure is meant, so aspect-anchored facts
+        decide first ("Milk" for a milk quantity — never the yield). Where no
+        anchor names the aspect — the doneness table, whose aspect words are
+        page-level — the SUBJECT keys the row instead, any token: "Beef,
+        veal, lamb, pork" is how a table lists ground beef. An exact anchor
+        (table-row) outranks a proximity one (ADR-0004 Q1).
+        """
+        units = {q.unit for q in cqs}
+        cands = [f for f in facts if f.unit_base in units]
+        if not cands:
+            return None
+        group = []
+        if toks:
+            hits = [f for f in cands
+                    if self._covers(toks, f.anchor_text) >= self.aspect_coverage]
+            exact = [f for f in hits if f.anchor_kind == "table-row"]
+            group = exact or hits
+        if not group:
+            subj = [w for w in norm(claim.subject).split()
+                    if len(w) > 3 and w not in _WEAK]
+            group = [f for f in cands
+                     if any(any(v in norm(f.anchor_text) for v in self._variants(w))
+                            for w in subj)]
+            exact = [f for f in group if f.anchor_kind == "table-row"]
+            group = exact or group
+            if not group:
+                return None
+            # Measured doctrine: when a subject-level read finds SEVERAL
+            # temperatures, which row governs is structure the claim cannot
+            # recover — declare nothing rather than pick one.
+            if "c" in units:
+                temps = {round(f.value_lo) for f in group if f.unit_base == "c"}
+                if len(temps) > 1:
+                    return None
+        agree = [f for f in group if self._agrees(cqs, f)]
+        return (bool(agree), (agree or group)[0], group)
+
+    def _check_facts(self, claim: Claim, cqs, t0) -> Finding:
+        import time
+
+        toks = [w for w in norm(claim.aspect).split()
+                if len(w) > 3 and w not in _WEAK]
+        normalized = (f"aspect→{toks}; value {claim.value!r}→"
+                      + ", ".join(f"{q.lo:g} {q.unit}" if q.single
+                                  else f"{q.lo:g}–{q.hi:g} {q.unit}" for q in cqs))
+        docs, channel = self.passages(claim.query, must=claim.subject)
+        done = lambda: (time.perf_counter() - t0) * 1000
+        if not docs:
+            return Finding(claim, NOT_FOUND, detail="nothing retrieved",
+                           normalized=normalized, latency_ms=done(), channel=channel)
+        sup, con = [], []
+        for d in docs:
+            text = d.get("passage") or d.get("text_excerpt") or ""
+            if not self._names(claim.subject, norm(text)):
+                continue
+            decided = self._address(claim, cqs, toks, self._facts_for(d))
+            if decided is None:
+                continue
+            agreed, fact, group = decided
+            (sup if agreed else con).append((d, fact, group))
+
+        def cite(d, f):
+            return {"source_file": d.get("source_file", ""),
+                    "source_location": d.get("source_location", ""),
+                    "evidence": f.raw_text,
+                    "figure": f"{f.value_lo:g} {f.unit_base}"}
+
+        if sup and con:
+            # Both readings exist. Returned together, flagged, never resolved
+            # by rank order — the claim-level form of the CONTRADICTS
+            # guarantee (blueprint §3 controls 3/4).
+            a, b = cite(*sup[0][:2]), cite(*con[0][:2])
+            return Finding(claim, CONFLICTED,
+                           evidence=sup[0][1].raw_text,
+                           source_file=a["source_file"],
+                           source_location=a["source_location"],
+                           detail=(f"for: {a['figure']} @ {a['source_location']}; "
+                                   f"against: {b['figure']} @ {b['source_location']}"),
+                           normalized=normalized,
+                           conflict={"for": a, "against": b},
+                           latency_ms=done(), channel=channel)
+        if sup:
+            d, f, _ = sup[0]
+            return Finding(claim, SUPPORTED, evidence=f.raw_text,
+                           source_file=d.get("source_file", ""),
+                           source_location=d.get("source_location", ""),
+                           detail=(f"{f.value_lo:g} {f.unit_base} ≈ claim "
+                                   f"[{f.anchor_kind}]"),
+                           normalized=normalized, latency_ms=done(), channel=channel)
+        if con:
+            d, f, group = con[0]
+            vals = ", ".join(f"{g.value_lo:g} {g.unit_base}" for g in group[:4])
+            return Finding(claim, CONTRADICTED, evidence=f.raw_text,
+                           source_file=d.get("source_file", ""),
+                           source_location=d.get("source_location", ""),
+                           detail=f"differs: source says {vals} [{f.anchor_kind}]",
+                           normalized=normalized, latency_ms=done(), channel=channel)
+        return Finding(claim, NOT_FOUND, detail="retrieved, but no fact addresses it",
+                       source_file=docs[0].get("source_file", ""),
+                       normalized=normalized, latency_ms=done(), channel=channel)
+
     def check(self, claim: Claim) -> Finding:
         import time
+
+        from graphify_ent.quantities import default_table, scan
+
         t0 = time.perf_counter()
-        # A figure the grammar cannot parse is a figure this module cannot
-        # adjudicate — and must never fall through to the substring search
-        # below, which confirmed "1 gal" as a milk quantity off the yield
-        # line: a bare substring names no owner (ADR-0004, Q4-A). Refuse
-        # explicitly; the reason travels in `detail`. The verdict stays
-        # inside the documented triad until the UNPARSED verdict of
-        # ADR-0004 Q3 ships with its consumer updates.
-        if claim.value and re.search(r"\d", claim.value) and not quantities(claim.value):
-            return Finding(claim, NOT_FOUND,
-                           detail=f"unparsed figure: {claim.value!r} — refusing, not guessing",
-                           latency_ms=(time.perf_counter() - t0) * 1000)
+        if claim.value:
+            cqs = scan(claim.value, default_table())
+            if cqs:
+                # A figure the grammar reads is settled against canonical
+                # facts — figures with declared owners — never against raw
+                # page text (ADR-0004 Q1/Q3).
+                return self._check_facts(claim, cqs, t0)
+            if re.search(r"\d", claim.value):
+                # A figure the grammar cannot parse is a figure this module
+                # cannot adjudicate — and must never fall through to the
+                # substring search below, which confirmed "1 gal" as a milk
+                # quantity off the yield line (ADR-0004 Q4-A).
+                return Finding(claim, UNPARSED,
+                               detail=f"unparsed figure: {claim.value!r} — refusing, not guessing",
+                               latency_ms=(time.perf_counter() - t0) * 1000)
         # The subject anchors retrieval: it is what the claim is about.
         docs, channel = self.passages(claim.query, must=claim.subject)
         if not docs:

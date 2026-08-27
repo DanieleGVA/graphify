@@ -20,9 +20,12 @@ from pathlib import Path
 from graphify_ent.embed import Embedder
 from graphify_ent.loader import Neo4jLoader
 from graphify_ent.retrieval import HybridRetriever
-from graphify_ent.verify import CONTRADICTED, NOT_FOUND, SUPPORTED, Claim, Verifier
+from graphify_ent.verify import (CONFLICTED, CONTRADICTED, NOT_FOUND,
+                                 SUPPORTED, UNPARSED, Claim, Verifier)
 
-_MARK = {SUPPORTED: "CONFERMATA", CONTRADICTED: "SMENTITA", NOT_FOUND: "NON TROVATA"}
+_MARK = {SUPPORTED: "CONFERMATA", CONTRADICTED: "SMENTITA",
+         NOT_FOUND: "NON TROVATA", UNPARSED: "ILLEGGIBILE",
+         CONFLICTED: "IN CONFLITTO"}
 
 
 def main() -> int:
@@ -66,7 +69,7 @@ def main() -> int:
         print(f"   ({f.latency_ms:.0f} ms, canale {f.channel})")
 
     counts = {v: sum(1 for f in findings if f.verdict == v)
-              for v in (SUPPORTED, CONTRADICTED, NOT_FOUND)}
+              for v in (SUPPORTED, CONTRADICTED, NOT_FOUND, UNPARSED, CONFLICTED)}
     report = {
         "card": card.get("title"), "claims": len(findings), "counts": counts,
         "total_ms": round(wall, 1),

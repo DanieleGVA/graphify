@@ -69,12 +69,16 @@ def build_mcp(service=None):
     def verify_claim(subject: str, aspect: str = "", value: str = "",
                      domain: str = "pilot") -> dict[str, Any]:
         """Settle one documentary claim against the graph — never the source
-        file. Verdicts: SUPPORTED / CONTRADICTED / NOT_FOUND, each carrying the
-        deciding passage with book and page. NOT_FOUND is a finding, not an
-        invitation to guess."""
+        file. Verdicts: SUPPORTED / CONTRADICTED / NOT_FOUND / UNPARSED /
+        CONFLICTED, each carrying the deciding passage with book and page.
+        NOT_FOUND is a finding, not an invitation to guess; UNPARSED is an
+        explicit refusal on a figure the grammar cannot read; CONFLICTED
+        returns BOTH readings, cited, never resolved by rank. The claim as
+        adjudicated is logged in `normalized` (ADR-0004)."""
         from graphify_ent.verify import Claim, Verifier
         s = svc()
-        verifier = Verifier(s.retriever, embed_fn=s._embed, domain=domain)
+        verifier = Verifier(s.retriever, embed_fn=s._embed, domain=domain,
+                            glossary=getattr(s.retriever, "glossary", None))
         return verifier.check(Claim(subject=subject, aspect=aspect,
                                     value=value)).as_dict()
 
