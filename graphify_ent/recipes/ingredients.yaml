@@ -22,7 +22,7 @@
 # classified by its head noun. Order within a list does not matter; position in
 # the LINE does.
 
-version: 2
+version: 3
 
 units:
   # ml per unit of volume
@@ -188,7 +188,11 @@ ingredients:
     synonyms: [egg yolks, egg yolk, yolks, yolk, tuorli, tuorlo, jaunes, jaune]
     unit_g: 18.0
   egg_white:
-    synonyms: [egg whites, egg white, whites, albumi, albume, blancs, blanc d]
+    # "EGGS WHITES" is how a catalogue writes it, and the plural broke the
+    # match: "egg whites" is not a substring of "eggs whites", so the leftmost
+    # rule found "eggs" and called a Swiss meringue whole egg.
+    synonyms: [eggs whites, eggs white, egg whites, egg white, whites,
+               albumi, albume, blancs, blanc d]
     unit_g: 30.0
 
   # --- chocolate, coffee, flavour ----------------------------------------
@@ -414,6 +418,57 @@ ingredients:
   spinach:
     synonyms: [spinach, spinaci, épinards, epinards]
     density: 0.25
+  asparagus:
+    synonyms: [asparagus, asparagi, asperges]
+    density: 0.60
+  zucchini:
+    synonyms: [zucchini, courgette, zucchine]
+    density: 0.60
+  lettuce:
+    synonyms: [lettuce romaine, lettuce american, lettuce, romaine, lattuga,
+               laitue, cos lettuce]
+    density: 0.25
+  leek:
+    synonyms: [leeks, leek, porri, poireaux]
+    density: 0.55
+  gherkin:
+    synonyms: [gherkins, gherkin, cetriolini, cornichons, pickled vegetables,
+               vegetables pickled]
+    density: 0.85
+  bacon:
+    synonyms: [bacon, pancetta, lardons]
+    density: 1.00
+  salmon:
+    synonyms: [salmon fillet, salmon, salmone, saumon]
+    density: 1.00
+  oats:
+    synonyms: [oats rolled, rolled oats, oats, avena, flocons d'avoine]
+    density: 0.40
+  bread:
+    synonyms: [croutons, hamburger buns, burger buns, bread buns, buns, bread,
+               pane, pain]
+    density: 0.30
+  cumin:
+    synonyms: [cumin, cumino]
+    density: 0.45
+  bay_leaf:
+    synonyms: [bay leaves, bay leaf, laurel, alloro, laurier]
+    density: 0.20
+  sage:
+    synonyms: [sage, salvia, sauge]
+    density: 0.20
+  caesar_dressing:
+    synonyms: [dressing caesar salad, caesar dressing]
+    density: 1.00
+  hollandaise:
+    synonyms: [hollandaise sauce, holland sauce, hollandaise, sauce hollandaise]
+    density: 1.00
+  petit_four:
+    synonyms: [petit fours, petits fours, petit four]
+    density: 0.60
+  vegan_patty:
+    synonyms: [vegan burger, veggie burger, plant-based patty]
+    density: 1.00
   broccoli:
     synonyms: [broccoli, broccolo]
     density: 0.40
