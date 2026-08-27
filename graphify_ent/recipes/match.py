@@ -248,6 +248,46 @@ class CorpusIndex:
         return self._by_page.get((source_file, page))
 
 
+def confidence(ranked: list["Match"], query: "RecipeQuery",
+               idf: dict[str, float]) -> dict:
+    """How much a top match can be trusted, when nothing declares the answer.
+
+    The merged card export carries no reference work at all, so the matcher has
+    to find one AND decide whether what it found is a reference or the nearest
+    unrelated page. The combined score cannot make that decision on its own:
+    measured on the Pareto export, whose cards DO declare their canon, the four
+    dishes whose reference the corpus does not hold scored 0.42-0.65 while true
+    book-level matches scored 0.25-0.55 — fully overlapping. A threshold there
+    would refuse real matches and accept absent ones in the same breath.
+
+    Three signals that are not the score:
+
+    `margin`   how far the winner stands above the runner-up. A real reference
+               is a page nobody else looks like; a coincidence has a queue of
+               equally plausible neighbours behind it.
+    `rarity`   the share of the query's IDF mass explained by the match. A page
+               agreeing on salt, oil and onion explains almost none of what
+               identifies the recipe, however high its raw agreement.
+    `signal`   the query's own discriminating power: a card of two common
+               ingredients cannot be identified by anyone, and saying so is
+               more useful than ranking it.
+    """
+    if not ranked:
+        return {"margin": 0.0, "rarity": 0.0, "signal": 0.0, "verdict": "NO_CANDIDATES"}
+    top = ranked[0]
+    runner = ranked[1].combined if len(ranked) > 1 else 0.0
+    margin = (top.combined - runner) / top.combined if top.combined else 0.0
+    mass = sum(idf.get(k, 0.0) * v for k, v in query.proportions.items())
+    shared = sum(idf.get(k, 0.0) * min(v, top.candidate.proportions.get(k, 0.0))
+                 for k, v in query.proportions.items())
+    rarity = shared / mass if mass else 0.0
+    # The query's own discriminating power: mean rarity of what it is made of.
+    signal = (sum(idf.get(k, 0.0) for k in query.proportions)
+              / max(len(query.proportions), 1))
+    return {"margin": round(margin, 4), "rarity": round(rarity, 4),
+            "signal": round(signal, 4)}
+
+
 def match_text(text: str, index: CorpusIndex, title: str = "",
                registry: Registry | None = None,
                top: int = 10) -> list[Match]:

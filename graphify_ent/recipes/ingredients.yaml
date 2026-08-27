@@ -22,7 +22,7 @@
 # classified by its head noun. Order within a list does not matter; position in
 # the LINE does.
 
-version: 3
+version: 4
 
 units:
   # ml per unit of volume
@@ -418,6 +418,96 @@ ingredients:
   spinach:
     synonyms: [spinach, spinaci, épinards, epinards]
     density: 0.25
+  cauliflower:
+    synonyms: [cauliflowers florets, cauliflowers, cauliflower, cavolfiore,
+               chou-fleur]
+    density: 0.40
+  peas:
+    synonyms: [peas green, green peas, peas, piselli, petits pois]
+    density: 0.70
+  cabbage:
+    synonyms: [bok choy, cabbage, cavolo, chou]
+    density: 0.40
+  chard:
+    synonyms: [swiss chard, silverbeet, chard, bietole, blettes]
+    density: 0.30
+  artichoke:
+    synonyms: [artichoke hearts, artichokes, artichoke, carciofi, artichauts]
+    density: 0.60
+  rocket:
+    synonyms: [arugula, rocket, rucola, roquette]
+    density: 0.20
+  celeriac:
+    synonyms: [celeriac, sedano rapa, celeri-rave]
+    density: 0.60
+  blueberry:
+    synonyms: [blueberries, blueberry, mirtilli, myrtilles]
+    density: 0.85
+  blackberry:
+    synonyms: [blackberries, blackberry, more, mures]
+    density: 0.85
+  cranberry:
+    synonyms: [cranberry, cranberries, mirtillo rosso]
+    density: 0.90
+  cherry:
+    synonyms: [candied cherry, cherries, cherry, ciliegie, cerises]
+    density: 0.90
+  pear:
+    synonyms: [pear halves, pears, pear, pere, poires]
+    density: 0.85
+  kiwi:
+    synonyms: [kiwifruit, kiwi]
+    density: 0.90
+  duck:
+    synonyms: [duck breast, duck, anatra, canard]
+    density: 1.00
+  ham:
+    synonyms: [raw ham parma, prosciutto, parma ham, raw ham, jambon]
+    density: 1.00
+  mint:
+    synonyms: [herb mint, mint syrup, mint, menta, menthe]
+    density: 0.25
+  coriander:
+    synonyms: [coriander, cilantro, coriandolo, coriandre]
+    density: 0.30
+  curry_leaf:
+    synonyms: [curry leaves, curry leaf, foglie di curry]
+    density: 0.20
+  curry_paste:
+    synonyms: [red thai curry, thai curry, curry paste, curry powder, curry]
+    density: 1.00
+  turmeric:
+    synonyms: [turmeric, curcuma]
+    density: 0.55
+  garam_masala:
+    synonyms: [garam masala]
+    density: 0.45
+  chili:
+    synonyms: [chili powder, chilli powder, peppers chili, chili, chilli,
+               peperoncino, piment]
+    density: 0.45
+  cardamom:
+    synonyms: [cardamom, cardamomo, cardamome]
+    density: 0.45
+  mustard_seed:
+    synonyms: [seeds mustard, mustard seeds, semi di senape]
+    density: 0.65
+  port:
+    synonyms: [port sandeman, port wine, porto]
+    density: 1.00
+  balsamic:
+    synonyms: [balsamic syrup, balsamic vinegar, balsamic, aceto balsamico,
+               balsamico]
+    density: 1.15
+  brioche:
+    synonyms: [brioche dough, brioche]
+    density: 0.90
+  muffin_mix:
+    synonyms: [mix muffin, muffin]
+    density: 0.60
+  tartlet_shell:
+    synonyms: [tartlet sweetcrust, tartlet shell, tartlet, tartelette]
+    density: 0.90
   asparagus:
     synonyms: [asparagus, asparagi, asperges]
     density: 0.60

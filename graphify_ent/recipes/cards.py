@@ -14,10 +14,12 @@ still supplies the canonical identity and the gravimetric conversion.
 
 What the card also carries, and the old report did not:
 
-  * `Canon <book>` — the reference work the dish is supposed to follow. It
-    names a BOOK, not a page, and some read "… — TO ACQUIRE", meaning the
-    corpus does not hold it. Those are the honest negatives: a matcher must
-    NOT return a confident page for them.
+  * `Canon <book>` — WHEN PRESENT, the reference work the dish is supposed to
+    follow. The Pareto export carried it; the merged export (2026-08-27) does
+    not, and that is the point of the exercise: with no declared reference, the
+    matcher has to FIND one by the three criteria and say so with evidence, or
+    refuse. `canon` is then empty and `canon_available` is meaningless — the
+    caller must not read absence as availability.
   * item codes, waste percentages, derived allergens, menu slots. None of them
     feed the fingerprint today; they are kept on the parsed card so a later
     stage can use them without re-reading the PDF.
@@ -53,8 +55,9 @@ _CODE = re.compile(r"^(RF\d+)\s*$", re.M)
 _ITEM = re.compile(r"^(CM\d+|SF\d+|RF\d+|—)$")
 _NUM = re.compile(r"^\d{1,3}$")
 _QTY = re.compile(r"^\d+(?:[.,]\d+)?$")
-_PAGE_NOISE = re.compile(r"^(page \d+|FOODMDM ·.*|#|Item code|Ingredient — verbatim|"
-                         r"Qty|Unit|Preparation|Waste|Allergens \(derived\))$")
+_PAGE_NOISE = re.compile(r"^(page \d+|FOODMDM ·.*|#|Item code|Ingredient(?: — verbatim)?|"
+                         r"Qty|Unit|Preparation|Wastage|Waste|"
+                         r"Allergens \(derived\))$")
 
 #: Units the export uses that are not in the registry's tables: a count of
 #: pieces, and "TT" (to taste) written as a unit.
@@ -169,7 +172,10 @@ def parse_cards(text: str) -> list[Card]:
         # ascending run (1..N) while procedure steps restart at 1 inside every
         # card, and that is the exact discriminator.
         n = int(m.group(1))
-        if _CODE.search(window) and "Menu slots" in window and n == expected:
+        # "Record type" is on the metadata line of BOTH exports; "Menu slots"
+        # was only on the Pareto one, and requiring it made the reader blind to
+        # the merged export entirely.
+        if _CODE.search(window) and "Record type" in window and n == expected:
             starts.append((i, n, m.group(2).strip()))
             expected += 1
 
