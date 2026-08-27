@@ -38,7 +38,10 @@ def main() -> int:
 
     exp = {}
     for e in json.loads(args.expected.read_text())["expected"]:
-        exp[(e["card"], e["subject"], e["aspect"])] = e
+        # The value belongs in the key: a card can assert two figures for the
+        # same subject and aspect — "ground beef cooked to 71°C" and "…74°C" —
+        # and keying without it silently graded both against the last one.
+        exp[(e["card"], e["subject"], e["aspect"], e.get("value", ""))] = e
 
     loader = Neo4jLoader()
     print(f"arm={args.arm}  graph={loader.uri}")
@@ -55,7 +58,7 @@ def main() -> int:
             card = json.loads((args.cards_dir / f"{name}.json").read_text())
             claims = [Claim(**c) for c in card["claims"]]
             for f in verifier.check_all(claims):
-                e = exp.get((name, f.claim.subject, f.claim.aspect))
+                e = exp.get((name, f.claim.subject, f.claim.aspect, f.claim.value))
                 expected = e["expected"] if e else "?"
                 correct = (f.verdict == SUPPORTED) == (expected == "SUPPORTED")
                 rows.append({"card": name, **f.as_dict(),

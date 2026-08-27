@@ -83,7 +83,7 @@ DEFAULT_TOKEN_BUDGET = 4_000
 # BM25 still cannot arbitrate support: an out-of-corpus query scores high on a
 # rare word precisely BECAUSE it is rare. The lexical channel establishes
 # support only when a single node contains EVERY term of the query.
-MIN_VECTOR_SIMILARITY = 0.70
+MIN_VECTOR_SIMILARITY = 0.75
 
 #: Similarity above which the semantic channel decides on its own, because no
 #: measured out-of-corpus question reaches it (max 0.773 on the two-book graph,
@@ -94,6 +94,22 @@ MIN_VECTOR_SIMILARITY = 0.70
 #: ingress controller tls" shares none of them however similar its vector
 #: looks. Calibrated in evidence/T90/refusal-calibration.json.
 STRONG_VECTOR = 0.80
+
+#: How many index candidates to pull per requested hit when a domain filter is
+#: in play. The vector index is shared across domains and filtering happens
+#: after retrieval, so a plain k returns only the fraction that happens to
+#: belong to the asked-for corpus.
+#: Coverage required in the overlap band. Ablated on the golden set: at 0.6 —
+#: the same bar the fast path uses — Q2 fell from 71.4% to 54.8%, because a
+#: question asked in natural language does not repeat the corpus's words. What
+#: separates a real question from a foreign one is not how MUCH it overlaps but
+#: whether it overlaps AT ALL.
+LEXICAL_FLOOR_IN_BAND = 0.0
+
+VECTOR_OVERFETCH = 8
+#: Ceiling for that widening: past this the scan costs more than the recall it
+#: buys, and a domain with nothing to say should refuse rather than dig.
+VECTOR_FETCH_CAP = 2000
 MIN_FULLTEXT_SCORE = 1.0       # lexical-only fallback; cannot separate on its own
 
 #: The explicit-refusal path. Returning this is a *correct* outcome, never a failure.
@@ -383,20 +399,77 @@ class HybridRetriever:
         return variants
 
     # -- channels ----------------------------------------------------------
+    #: Cache of which per-domain vector indexes exist, so the lookup is one
+    #: round trip per process rather than one per query.
+    _domain_indexes: dict | None = None
+
+    def _domain_index(self, domain: str | None) -> str:
+        if not domain:
+            return "entity_embedding"
+        if HybridRetriever._domain_indexes is None:
+            try:
+                with self.loader._session() as s:
+                    HybridRetriever._domain_indexes = {
+                        r["name"] for r in s.run(
+                            "SHOW INDEXES YIELD name WHERE name STARTS WITH "
+                            "'entity_' RETURN name")}
+            except Exception:
+                HybridRetriever._domain_indexes = set()
+        name = "entity_embedding_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)
+        return name if name in HybridRetriever._domain_indexes else "entity_embedding"
+
+    def _text_index(self, domain: str | None) -> str:
+        """Per-domain text index when one exists, for the same reason the
+        vector one exists: the shared index is cut to its best candidates
+        before the domain filter can apply."""
+        if not domain:
+            return "entity_text"
+        if HybridRetriever._domain_indexes is None:
+            self._domain_index(domain)          # populates the cache
+        name = "entity_text_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)
+        return name if name in (HybridRetriever._domain_indexes or ()) else "entity_text"
+
     def vector_search(
         self, embedding: list[float], top_k: int = DEFAULT_TOP_K, domain: str | None = None
     ) -> list[tuple[str, float]]:
+        """Nearest neighbours inside one domain.
+
+        The index holds every domain, and `queryNodes` picks its k nearest
+        BEFORE the domain filter can apply, so asking for k and filtering after
+        returns whatever survives — often nothing. Measured on the two-corpus
+        graph: a third of the calibration queries came back empty and the
+        semantic channel went blind without any error. So over-fetch, and widen
+        until the domain yields enough or the index is exhausted.
+        """
+        # One index per domain when the graph has them: a shared index makes
+        # every corpus pay for every other. Measured on a 149k-node graph
+        # holding two corpora — searching the shared index for one of them cost
+        # 435 ms and lost a verification, against 33 ms and none when each had
+        # its own. Falls back to the shared index where a per-domain one has
+        # not been built.
+        index = self._domain_index(domain)
         cypher = (
-            "CALL db.index.vector.queryNodes('entity_embedding', $k, $v) "
+            f"CALL db.index.vector.queryNodes('{index}', $k, $v) "
             "YIELD node, score "
             "WHERE ($domain IS NULL OR node.domain = $domain) "
             + self._validity_clause("node")
-            + " RETURN node.id AS id, score ORDER BY score DESC"
+            + " RETURN node.id AS id, score ORDER BY score DESC LIMIT $want"
         )
         with self.loader._session() as s:
             try:
-                return [(r["id"], r["score"]) for r in s.run(cypher, k=top_k, v=embedding,
-                                                             domain=domain)]
+                if domain is None or index != "entity_embedding":
+                    return [(r["id"], r["score"])
+                            for r in s.run(cypher, k=top_k, want=top_k, v=embedding,
+                                           domain=domain)]
+                fetch = top_k * VECTOR_OVERFETCH
+                for _ in range(3):
+                    rows = [(r["id"], r["score"])
+                            for r in s.run(cypher, k=fetch, want=top_k, v=embedding,
+                                           domain=domain)]
+                    if len(rows) >= top_k or fetch >= VECTOR_FETCH_CAP:
+                        return rows
+                    fetch = min(fetch * 4, VECTOR_FETCH_CAP)
+                return rows
             except Exception as exc:
                 # A width mismatch between the encoder and the index is a
                 # misconfiguration, not a query failure: say so plainly rather
@@ -423,6 +496,7 @@ class HybridRetriever:
         instead of refused. One passage containing most of what was asked is
         evidence; one passage containing one word of it is not.
         """
+        index = self._text_index(domain)
         terms = sorted({w.lower() for w in re.findall(r"[\w\u00c0-\u017f]{3,}", query_text)}
                        - _FUNCTION_WORDS)
         if not terms:
@@ -433,9 +507,19 @@ class HybridRetriever:
             # Cut to the best candidates BEFORE the text scan. Without this the
             # CONTAINS ran over every OR match in the corpus and the "one round
             # trip" version came out slower than the two-query one it replaced.
-            "CALL db.index.fulltext.queryNodes('entity_text', $q) YIELD node, score "
-            "WITH node, score ORDER BY score DESC LIMIT $probe "
-            "WHERE ($domain IS NULL OR node.domain = $domain) "
+            f"CALL db.index.fulltext.queryNodes('{index}', $q) "
+            "YIELD node, score "
+            # Where the cut sits relative to the domain filter decides both
+            # recall and cost. On a SHARED index the filter must come first, or
+            # the best `probe` candidates are drawn from every corpus and one
+            # corpus is left with a handful. On a PER-DOMAIN index the filter is
+            # redundant, so the cut goes first and the expensive CONTAINS scan
+            # runs over `probe` rows instead of every row the corpus matched —
+            # measured, 645 ms against 16 ms per verification.
+            + ("WITH node, score ORDER BY score DESC LIMIT $probe WHERE true "
+               if index != "entity_text" else
+               "WHERE ($domain IS NULL OR node.domain = $domain) "
+               "WITH node, score ORDER BY score DESC LIMIT $probe WHERE true ")
             + self._validity_clause("node") +
             " WITH node, score, toLower(coalesce(node.passage,'') + ' ' + "
             "coalesce(node.label,'') + ' ' + coalesce(node.text_excerpt,'')) AS body "
@@ -481,7 +565,7 @@ class HybridRetriever:
         require_all: bool = False, require_terms: int = 0,
     ) -> list[tuple[str, float]]:
         cypher = (
-            "CALL db.index.fulltext.queryNodes('entity_text', $q) "
+            f"CALL db.index.fulltext.queryNodes('{self._text_index(domain)}', $q) "
             "YIELD node, score "
             "WHERE ($domain IS NULL OR node.domain = $domain) "
             + self._validity_clause("node")
@@ -651,7 +735,7 @@ class HybridRetriever:
                 # a foreign one, so require that the corpus contain the words
                 # actually asked about. Measured on the twelve-book graph: with
                 # similarity alone, 10 of 24 foreign questions were answered.
-                supported = lexical_coverage >= MIN_TERM_COVERAGE
+                supported = lexical_coverage >= LEXICAL_FLOOR_IN_BAND
                 channel_counts["decided_by"] = "lexicon"
         else:
             supported = best_fulltext >= min_fulltext_score

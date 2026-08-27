@@ -33,9 +33,15 @@ SUPPORTED = "SUPPORTED"
 CONTRADICTED = "CONTRADICTED"
 NOT_FOUND = "NOT_FOUND"
 
-#: Quantities as cookbooks write them: "454 g", "8 oz", "4.80 L", "1 lb 2 oz".
+#: Quantities as cookbooks write them: "454 g", "8 oz", "4.80 L", "1 lb 2 oz"
+#: — and temperatures, "165°F/74°C". Temperatures were absent until a card
+#: asserting 74 °C for ground beef came back SUPPORTED: with no unit matched,
+#: the check fell through to a TEXT search and found "74°C" on the same page,
+#: on the line about ground poultry. A figure the system cannot parse is a
+#: figure it cannot contradict.
 _QTY = re.compile(
-    r"(\d+(?:[.,]\d+)?)\s*(kg|g|mg|lb|oz|l|litres?|liters?|ml|cl|dl|tbsp|tsp)\b", re.I)
+    r"(\d+(?:[.,]\d+)?)\s*(kg|g|mg|lb|oz|l|litres?|liters?|ml|cl|dl|tbsp|tsp"
+    r"|°\s*[CF]|degrees?\s*[CF])\b", re.I)
 
 #: Everything normalised to grams or millilitres so "8 oz" and "227 g" compare.
 _TO_BASE = {
@@ -45,17 +51,33 @@ _TO_BASE = {
     "liter": ("ml", 1000.0), "liters": ("ml", 1000.0),
     "ml": ("ml", 1.0), "cl": ("ml", 10.0), "dl": ("ml", 100.0),
     "tbsp": ("ml", 15.0), "tsp": ("ml", 5.0),
+    # Temperatures normalise to Celsius; Fahrenheit needs an offset, so it is
+    # handled in `quantities` rather than by a factor.
+    "°c": ("c", 1.0), "°f": ("c", None),
 }
+
+#: Absolute tolerance for temperatures, in Celsius. The relative tolerance used
+#: for weights would call 71 °C and 74 °C the same figure — a 4% gap that is
+#: precisely the difference between the ground-beef row and the poultry row.
+TEMP_TOLERANCE_C = 2.0
 
 
 def quantities(text: str) -> list[tuple[float, str]]:
-    """Every quantity in `text`, normalised to grams or millilitres."""
+    """Every quantity in `text`, normalised to grams, millilitres or Celsius."""
     out = []
     for value, unit in _QTY.findall(text or ""):
-        base = _TO_BASE.get(unit.lower())
-        if not base:
+        u = re.sub(r"[\s°]", "", unit.lower()).replace("degrees", "").replace("degree", "")
+        v = float(value.replace(",", "."))
+        if u == "c":
+            out.append((v, "c"))
             continue
-        out.append((float(value.replace(",", ".")) * base[1], base[0]))
+        if u == "f":
+            out.append(((v - 32) * 5 / 9, "c"))
+            continue
+        base = _TO_BASE.get(u)
+        if not base or base[1] is None:
+            continue
+        out.append((v * base[1], base[0]))
     return out
 
 
@@ -216,6 +238,59 @@ class Verifier:
         lo = max(0, best - width // 3)
         return text[lo: lo + width]
 
+    #: Half-width of the window read around the subject when a claim carries a
+    #: figure. Wide enough for a sentence that names its subject once and its
+    #: quantity a clause later.
+    NEAR_WINDOW = 320
+
+    @staticmethod
+    def _is_tabular(text: str) -> bool:
+        """A page that lists many figures against many names. There a number
+        found "somewhere on the page" belongs to some other row."""
+        qty = len(_QTY.findall(text or ""))
+        return qty >= 6
+
+    def _near_subject(self, subject: str, text: str) -> str:
+        """The part of `text` that speaks about this subject.
+
+        On a table the unit is the LINE: "Turkey, chicken 165°F/74°C" and
+        "Beef, veal, lamb, pork 160°F/71°C" sit two lines apart, and any
+        character window wide enough to hold a row's own figure also holds its
+        neighbour's. Measured: reading by window confirmed 74 °C for ground
+        beef from the poultry line. In prose, where a subject and its number
+        can be a clause apart, the window is the right unit — so the shape of
+        the text decides which is used.
+        """
+        subj = norm(subject)
+        words = [w for w in subj.split() if len(w) > 3 and w not in _WEAK] or [subj]
+        if not any(words):
+            return text
+        if self._is_tabular(text):
+            # In a PDF table each cell is its own line: the row reads
+            # "Beef, veal, lamb, pork" and the figure "160°F/71°C" sits on the
+            # NEXT line. So take the matching line and the two that follow.
+            #
+            # The anchor is the RAREST word of the subject, not the longest:
+            # for "ground beef", "ground" heads the whole family of rows
+            # ("Ground meat and meat mixtures") while "beef" names exactly one.
+            # Anchoring on the longest word read the poultry row and confirmed
+            # 74 °C for beef.
+            lines = [ln for ln in text.splitlines() if ln.strip()]
+            body = norm(text)
+            anchor = min(words, key=lambda w: (body.count(w), -len(w)))
+            picked: list[str] = []
+            for i, ln in enumerate(lines):
+                if anchor in norm(ln):
+                    picked.extend(lines[i: i + 3])
+            return "\n".join(picked)
+        out = []
+        body = norm(text)
+        anchor = max(words, key=len)
+        for m in re.finditer(re.escape(anchor), body):
+            lo = max(0, m.start() - self.NEAR_WINDOW)
+            out.append(text[lo: m.end() + self.NEAR_WINDOW])
+        return "\n".join(out) if out else ""
+
     # -- adjudication -----------------------------------------------------
     def _match(self, claim: Claim, text: str) -> tuple[bool, str]:
         """Does `text` speak to this claim, and does it agree?
@@ -249,14 +324,36 @@ class Verifier:
         want = quantities(claim.value)
         if not want:
             return (norm(claim.value) in body), "text"
+        # Read the figure NEAR the subject, not anywhere on the page. A page of
+        # doneness temperatures names a dozen meats and a dozen figures; taking
+        # any of them confirmed "ground beef at 74 °C" from the line about
+        # ground poultry. The window is generous — prose separates a subject
+        # from its number — but it is a window.
         found = quantities(text)
+        # A doneness table lists many meats against many temperatures, nested
+        # ("Ground meat and meat mixtures" over "Beef, veal, lamb, pork"), and
+        # which row governs is structure the passage no longer carries. When
+        # several DIFFERENT temperatures sit on such a page, saying "the table
+        # gives several values" is the correct answer — picking one silently is
+        # the failure this system exists to prevent. Measured: without this, a
+        # card claiming 74 °C for ground beef was confirmed from the poultry
+        # row. Restricted to temperatures, which is where it was measured: an
+        # ingredient list also holds many figures, and there the aspect names
+        # which one is meant.
+        if want[0][1] == "c":
+            temps = {round(v) for v, u in found if u == "c"}
+            if len(temps) > 1:
+                return False, ("ambiguous: the page gives several temperatures "
+                               f"({', '.join(str(t) for t in sorted(temps))} C)")
         if not found:
             return False, ""
         for wv, wu in want:
             for fv, fu in found:
                 if fu != wu:
                     continue
-                if abs(fv - wv) <= self.tolerance * max(wv, 1e-9):
+                tol = (TEMP_TOLERANCE_C if wu == "c"
+                       else self.tolerance * max(wv, 1e-9))
+                if abs(fv - wv) <= tol:
                     return True, f"{fv:g} {fu} ≈ {wv:g} {wu}"
         # Same unit present, different magnitude: the source disagrees.
         same_unit = [f"{fv:g} {fu}" for fv, fu in found if fu == want[0][1]]
