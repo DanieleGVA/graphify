@@ -281,3 +281,32 @@ class TestProseScopes:
         ok, why = Verifier(None)._match(Claim("custard", "bring it to", "84°C"), text)
         assert not ok
         assert "ambiguous" in why, why
+
+
+class TestUnparsedFigureGuard:
+    """ADR-0004 Q4-A. Measured against the real corpus: "1 gal" is not in the
+    unit table, so the check fell through to a substring search and confirmed
+    the claim from the YIELD line ("Makes 1 gal/3.84 L") — a false SUPPORTED
+    for a milk quantity of 5 qt. A substring names no owner: a figure the
+    grammar cannot parse is refused, never guessed."""
+
+    def test_the_yield_figure_no_longer_confirms_an_ingredient(self):
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "1 gal"))
+        assert f.verdict == NOT_FOUND
+        assert "unparsed figure" in f.detail
+
+    def test_the_refusal_names_the_figure_it_could_not_read(self):
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "17 qt"))
+        assert f.verdict == NOT_FOUND and "17 qt" in f.detail
+
+    def test_a_fraction_is_refused_not_substring_matched(self):
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "1/2 cup"))
+        assert f.verdict == NOT_FOUND and "unparsed figure" in f.detail
+
+    def test_a_parseable_figure_is_still_adjudicated(self):
+        assert _verifier(BECHAMEL).check(
+            Claim("Bechamel Sauce", "white roux", "454 g")).verdict == SUPPORTED
+
+    def test_a_digitless_claim_is_untouched_by_the_guard(self):
+        assert _verifier(BECHAMEL).check(
+            Claim("Bechamel Sauce", "White Roux")).verdict == SUPPORTED

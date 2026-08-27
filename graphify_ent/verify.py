@@ -468,6 +468,17 @@ class Verifier:
     def check(self, claim: Claim) -> Finding:
         import time
         t0 = time.perf_counter()
+        # A figure the grammar cannot parse is a figure this module cannot
+        # adjudicate — and must never fall through to the substring search
+        # below, which confirmed "1 gal" as a milk quantity off the yield
+        # line: a bare substring names no owner (ADR-0004, Q4-A). Refuse
+        # explicitly; the reason travels in `detail`. The verdict stays
+        # inside the documented triad until the UNPARSED verdict of
+        # ADR-0004 Q3 ships with its consumer updates.
+        if claim.value and re.search(r"\d", claim.value) and not quantities(claim.value):
+            return Finding(claim, NOT_FOUND,
+                           detail=f"unparsed figure: {claim.value!r} — refusing, not guessing",
+                           latency_ms=(time.perf_counter() - t0) * 1000)
         # The subject anchors retrieval: it is what the claim is about.
         docs, channel = self.passages(claim.query, must=claim.subject)
         if not docs:
