@@ -48,6 +48,47 @@ def content_words(quote: str, n: int = 4) -> list[str]:
     return re.findall(r"[A-Za-zÀ-ÿ]{5,}", quote)[:n]
 
 
+class BookText:
+    """The text of each in-corpus book, as the graph actually holds it.
+
+    Exists to separate two things this benchmark used to add together: a record
+    the system FAILED to ground, and a record NOBODY can ground because the
+    quote is not in our copy of the book. Measured, three of the 200 in-corpus
+    records are the second kind — the report transcribes an edition whose
+    wording our copy does not carry, and their `gt_pdf_page` is null because the
+    ground-truth extraction could not find them in the PDF either.
+
+    Charging those to the system makes the figure lie in both directions: it
+    hides real failures inside a noise floor, and it understates the system.
+    """
+
+    def __init__(self, retriever, domain: str | None):
+        self._r, self._domain, self._cache = retriever, domain, {}
+
+    def _blob(self, source_file: str) -> str:
+        if source_file not in self._cache:
+            # Pages in order, joined: a quote that straddles a page break is
+            # then found across the join, which is where it really lives.
+            with self._r.loader._session() as s:
+                rows = s.run(
+                    "MATCH (n:Entity) WHERE n.source_file = $f "
+                    "AND ($d IS NULL OR n.domain = $d) "
+                    "AND n.extraction_method = 'page' "
+                    "RETURN n.passage AS p ORDER BY n.page_lo",
+                    f=source_file, d=self._domain)
+                self._cache[source_file] = squash(" ".join(r["p"] or "" for r in rows))
+        return self._cache[source_file]
+
+    def contains(self, source_file: str | None, quote: str) -> bool:
+        if not source_file:
+            return False
+        q = squash(quote)
+        if not q:
+            return False
+        blob = self._blob(source_file)
+        return bool(blob) and (q in blob or (len(q) > 120 and q[:120] in blob))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--records", type=Path, default=Path("../eval/canon/records.json"))
@@ -62,6 +103,7 @@ def main() -> int:
     embedder = Embedder()
     embedder.encode(["warm up"])
     enc = lambda q: embedder.encode([q])[0]  # noqa: E731
+    books = BookText(retriever, args.domain)
 
     rows = []
     try:
@@ -88,9 +130,15 @@ def main() -> int:
                     break
             ms = (time.perf_counter() - t0) * 1000
             correct = grounded if e["in_corpus"] else not grounded
+            # Only asked when the system missed: if the quote came back, it is
+            # in the book by construction, and the scan is not free.
+            unlocatable = bool(
+                e["in_corpus"] and not grounded
+                and not books.contains(e.get("corpus_file"), e["quote"]))
             rows.append({"dish": e["dish"][:60], "book": e["book_key"],
                          "page": e["page"], "verdict": e["verdict"],
                          "in_corpus": e["in_corpus"], "grounded": grounded,
+                         "unlocatable": unlocatable,
                          "page_ok": page_ok, "correct": correct,
                          "refused": bool(res.refused), "ms": round(ms, 1),
                          "where": where})
@@ -107,6 +155,16 @@ def main() -> int:
             "grounded": sum(r["grounded"] for r in inc),
             "grounding_pct": round(100 * sum(r["grounded"] for r in inc)
                                    / max(len(inc), 1), 1),
+            # Reported alongside, never instead: the conservative figure stays
+            # the headline, and the honest denominator is visible next to it so
+            # nobody has to take the correction on trust.
+            "unlocatable": sum(r["unlocatable"] for r in inc),
+            "locatable_n": len(inc) - sum(r["unlocatable"] for r in inc),
+            "grounding_pct_locatable": round(
+                100 * sum(r["grounded"] for r in inc)
+                / max(len(inc) - sum(r["unlocatable"] for r in inc), 1), 1),
+            "unlocatable_records": [f"{r['dish']} ({r['book']} p{r['page']})"
+                                    for r in inc if r["unlocatable"]],
             "page_ok": sum(r["page_ok"] for r in inc),
             "by_book": {b: f"{sum(r['grounded'] for r in inc if r['book'] == b)}"
                            f"/{sum(1 for r in inc if r['book'] == b)}"

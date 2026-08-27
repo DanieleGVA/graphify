@@ -70,10 +70,19 @@ def main() -> int:
     embedder = Embedder()
     embedder.encode(["warm up"])
 
+    # The floor governs `best_vector` inside `query()`, and that is the maximum
+    # over EVERY lane the query runs — since the evidence lane, the page index
+    # as well as the domain-wide one. Measuring one lane would calibrate a
+    # number against something the system no longer computes.
+    lanes = retriever.lanes(args.domain)
+
     def best_similarity(q: str) -> float:
-        hits = retriever.vector_search(embedder.encode([q])[0], top_k=5,
-                                       domain=args.domain)
-        return max((s for _, s in hits), default=0.0)
+        v = embedder.encode([q])[0]
+        best = 0.0
+        for lane in lanes:
+            hits = retriever.vector_search(v, top_k=5, domain=args.domain, lane=lane)
+            best = max(best, max((s for _, s in hits), default=0.0))
+        return best
 
     try:
         ins = sorted(best_similarity(q) for q in inside)

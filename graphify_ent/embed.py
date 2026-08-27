@@ -19,6 +19,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from graphify_ent.loader import OVERLAP_PREFIX
+
 __all__ = ["EmbedStats", "Embedder", "embed_graph"]
 
 #: Chosen on measurement, not reputation: on this corpus MiniLM-L12-v2 scored
@@ -117,6 +119,14 @@ def _node_text(record) -> str:
     """
     label = record.get("label") or ""
     body = record.get("passage") or record.get("text_excerpt") or ""
+    # Text a page borrowed from the page after it belongs to that page, not to
+    # this one. It is there so a quote straddling the break can be MATCHED;
+    # embedding it would blur the two pages into one vector, and would also
+    # make the embedding depend on whether the overlap pass had run — the same
+    # node encoding differently on two graphs that hold the same book.
+    cut = body.find(OVERLAP_PREFIX)
+    if cut > 0:
+        body = body[:cut]
     # Bounded on purpose. A page node's passage is its whole page, and
     # embedding 3,600 characters of mixed content produces an averaged vector
     # that matches everything weakly — besides stalling the encoder. The long

@@ -38,7 +38,9 @@ __all__ = [
     "STRONG_FULLTEXT",
     "balance_by_method",
     "MIN_METHOD_SHARE",
+    "PAGE_LANE",
     "RESULT_WINDOW",
+    "evidence_lane_enabled",
     "Hit",
     "RetrievalResult",
     "HybridRetriever",
@@ -85,9 +87,16 @@ DEFAULT_TOKEN_BUDGET = 4_000
 # support only when a single node contains EVERY term of the query.
 MIN_VECTOR_SIMILARITY = 0.75
 
-#: Similarity above which the semantic channel decides on its own, because no
-#: measured out-of-corpus question reaches it (max 0.773 on the two-book graph,
-#: 0.788 on the twelve-book one). Between this and MIN_VECTOR_SIMILARITY the
+#: Similarity above which the semantic channel decides on its own. It was set
+#: where no measured out-of-corpus question reached — max 0.773 on the two-book
+#: graph, 0.788 on the twelve-book one — and that is no longer true: recalibrated
+#: across both lanes on the sixteen-book graph (evidence/T99), out-of-corpus
+#: reaches 0.800 on pilot and 0.796 on canon_library. A larger corpus always
+#: holds something vaguely close to anything, so the headroom shrinks as books
+#: are added and this number cannot be left to age. It costs nothing today only
+#: because LEXICAL_FLOOR_IN_BAND is 0.0, which makes the band support anything
+#: the floor lets through; the moment that floor rises, this one has to be
+#: re-measured with it. Between this and MIN_VECTOR_SIMILARITY the
 #: bands OVERLAP and similarity cannot settle the question — a large corpus
 #: always holds something vaguely close to anything. There the LEXICON decides:
 #: a real question about the corpus uses the corpus's words, and "kubernetes
@@ -171,6 +180,25 @@ LEXICAL_PROBE = 60
 #: this head of the list only; everything below keeps pure fused order.
 RESULT_WINDOW = 10
 
+#: Index-name suffix of the evidence lane — the page layer's own vector and
+#: fulltext indexes, built by `tools/build_domain_indexes.py`.
+PAGE_LANE = "_pages"
+
+#: The window balance below shares out the *results*; by then the damage is
+#: done, because a page absent from the candidates cannot be balanced into the
+#: window. Measured on the sixteen-book corpus: of 32 grounding failures, 28
+#: were pages that never entered the candidate set at all — 90-100% of it was
+#: concept nodes — and restricting retrieval to pages alone recovered 12 of 16
+#: sampled. So the share is enforced where candidates are *generated*: each
+#: lane queries its own index and RRF fuses the four ranked lists.
+#:
+#: `ENTERPRIPHY_EVIDENCE_LANE=0` turns it off for ablation. Off is also what a
+#: graph without page indexes gets, automatically: the lane is skipped when the
+#: index does not exist, never silently redirected to the shared one.
+def evidence_lane_enabled() -> bool:
+    return os.environ.get("ENTERPRIPHY_EVIDENCE_LANE", "1") != "0"
+
+
 #: Minimum share of that window guaranteed to each extraction method present.
 #: A graph can hold facts extracted in several ways at once — page-sized
 #: passages that carry surrounding text, and concept-sized nodes that carry a
@@ -210,6 +238,48 @@ def balance_by_method(
         else:
             tail.append(h)
     return head + tail
+
+def dedupe_by_page(hits: list["Hit"], window: int = RESULT_WINDOW,
+                   keep: int = 1) -> list["Hit"]:
+    """At most `keep` hits per source page in the head of the list.
+
+    A window is a budget of places to look, and the same page taken four times
+    is one place. Measured on the golden set: a ten-slot window held four nodes
+    from page 961 and two from page 101, so six of ten slots said the same
+    thing twice while the page that answered sat below the cut. Nothing is
+    dropped — the surplus moves down — so a caller reading further still sees
+    everything.
+
+    Which of the duplicates survives is not a detail. A page node carries the
+    whole page; a concept node from that page carries a window inside it, so
+    the page node subsumes its rivals and keeping the other one instead throws
+    text away. Measured: keeping the best-scored regardless cost two grounded
+    records on the canon benchmark, all of them pages that had been displaced
+    by their own concepts.
+    """
+    if window <= 0 or keep <= 0 or not hits:
+        return hits
+    counts: dict[tuple[str, str], int] = {}
+    at: dict[tuple[str, str], int] = {}
+    head: list[Hit] = []
+    tail: list[Hit] = []
+    for h in hits:
+        key = (h.source_file or "", h.source_location or h.node_id)
+        if len(head) < window and counts.get(key, 0) < keep:
+            at[key] = len(head)
+            head.append(h)
+            counts[key] = counts.get(key, 0) + 1
+        elif (key in at and h.extraction_method == "page"
+              and head[at[key]].extraction_method != "page"):
+            # Same page, wider text: take the slot, and the narrower node goes
+            # down with the rest. The slot keeps its rank — this is a swap
+            # inside one page, never a promotion over another page's hit.
+            tail.append(head[at[key]])
+            head[at[key]] = h
+        else:
+            tail.append(h)
+    return head + tail
+
 
 #: Ranking multipliers — provenance is part of the score, per architecture §2.
 CONFIDENCE_WEIGHT = {"EXTRACTED": 1.0, "INFERRED": 0.75, "AMBIGUOUS": 0.5}
@@ -403,7 +473,7 @@ class HybridRetriever:
     #: round trip per process rather than one per query.
     _domain_indexes: dict | None = None
 
-    def _domain_index(self, domain: str | None) -> str:
+    def _load_index_names(self) -> set[str]:
         if HybridRetriever._domain_indexes is None:
             try:
                 with self.loader._session() as s:
@@ -413,33 +483,59 @@ class HybridRetriever:
                             "'entity_' RETURN name")}
             except Exception:
                 HybridRetriever._domain_indexes = set()
+        return HybridRetriever._domain_indexes
+
+    def _domain_index(self, domain: str | None, lane: str = "") -> str:
+        """Vector index for `domain` in `lane`, or "" when the lane has none.
+
+        The empty string is deliberate: a missing page index means the graph
+        has no evidence lane, and falling back to the domain-wide index would
+        make the lane a duplicate of the one it is supposed to complement.
+        """
+        names = self._load_index_names()
         if not domain:
             return "entity_embedding"
-        if HybridRetriever._domain_indexes is None:
-            try:
-                with self.loader._session() as s:
-                    HybridRetriever._domain_indexes = {
-                        r["name"] for r in s.run(
-                            "SHOW INDEXES YIELD name WHERE name STARTS WITH "
-                            "'entity_' RETURN name")}
-            except Exception:
-                HybridRetriever._domain_indexes = set()
-        name = "entity_embedding_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)
-        return name if name in HybridRetriever._domain_indexes else "entity_embedding"
+        name = "entity_embedding_" + re.sub(r"[^A-Za-z0-9_]", "_", domain) + lane
+        if name in names:
+            return name
+        return "" if lane else "entity_embedding"
 
-    def _text_index(self, domain: str | None) -> str:
+    def _text_index(self, domain: str | None, lane: str = "") -> str:
         """Per-domain text index when one exists, for the same reason the
         vector one exists: the shared index is cut to its best candidates
         before the domain filter can apply."""
+        names = self._load_index_names()
         if not domain:
             return "entity_text"
-        if HybridRetriever._domain_indexes is None:
-            self._domain_index(domain)          # populates the cache
-        name = "entity_text_" + re.sub(r"[^A-Za-z0-9_]", "_", domain)
-        return name if name in (HybridRetriever._domain_indexes or ()) else "entity_text"
+        name = "entity_text_" + re.sub(r"[^A-Za-z0-9_]", "_", domain) + lane
+        if name in names:
+            return name
+        return "" if lane else "entity_text"
+
+    def _merged_vector_indexes(self, lane: str = "") -> list[str]:
+        """Every domain's vector index for one lane.
+
+        A domain-less query fans out over these instead of hitting a shared
+        index — there is none, by design: it held a second copy of every vector
+        and was what ran the database out of memory.
+        """
+        names = sorted(n for n in self._load_index_names()
+                       if n.startswith("entity_embedding_"))
+        return [n for n in names
+                if n.endswith(PAGE_LANE) == (lane == PAGE_LANE)]
+
+    def lanes(self, domain: str | None) -> tuple[str, ...]:
+        """Which lanes this query can use: always the domain-wide one, plus
+        the page lane when the graph has indexes for it and it is enabled."""
+        if not evidence_lane_enabled():
+            return ("",)
+        has_pages = (self._domain_index(domain, PAGE_LANE)
+                     or (domain is None and self._merged_vector_indexes(PAGE_LANE)))
+        return ("", PAGE_LANE) if has_pages else ("",)
 
     def vector_search(
-        self, embedding: list[float], top_k: int = DEFAULT_TOP_K, domain: str | None = None
+        self, embedding: list[float], top_k: int = DEFAULT_TOP_K,
+        domain: str | None = None, lane: str = "",
     ) -> list[tuple[str, float]]:
         """Nearest neighbours inside one domain.
 
@@ -456,7 +552,9 @@ class HybridRetriever:
         # 435 ms and lost a verification, against 33 ms and none when each had
         # its own. Falls back to the shared index where a per-domain one has
         # not been built.
-        index = self._domain_index(domain)
+        index = self._domain_index(domain, lane)
+        if not index:
+            return []
         cypher = (
             f"CALL db.index.vector.queryNodes('{index}', $k, $v) "
             "YIELD node, score "
@@ -471,8 +569,7 @@ class HybridRetriever:
                     # was what ran the database out of memory. A domain-less
                     # query therefore asks each domain's index and merges —
                     # two round trips instead of one, and no vector stored twice.
-                    known = sorted(HybridRetriever._domain_indexes or ())
-                    known = [i for i in known if i.startswith("entity_embedding_")]
+                    known = self._merged_vector_indexes(lane)
                     if known:
                         merged: list[tuple[str, float]] = []
                         for idx_name in known:
@@ -507,7 +604,8 @@ class HybridRetriever:
                 raise
 
     def _lexical_evidence(self, query_text: str, domain: str | None, top_k: int,
-                          must: str = "") -> tuple[list[tuple[str, float]], float]:
+                          must: str = "",
+                          lane: str = "") -> tuple[list[tuple[str, float]], float]:
         """Candidates that literally contain most of the query, and how much.
 
         One round trip. The term counting happens in the database, so what
@@ -521,7 +619,9 @@ class HybridRetriever:
         instead of refused. One passage containing most of what was asked is
         evidence; one passage containing one word of it is not.
         """
-        index = self._text_index(domain)
+        index = self._text_index(domain, lane)
+        if not index:
+            return [], 0.0
         terms = sorted({w.lower() for w in re.findall(r"[\w\u00c0-\u017f]{3,}", query_text)}
                        - _FUNCTION_WORDS)
         if not terms:
@@ -587,10 +687,13 @@ class HybridRetriever:
 
     def fulltext_search(
         self, text: str, top_k: int = DEFAULT_TOP_K, domain: str | None = None,
-        require_all: bool = False, require_terms: int = 0,
+        require_all: bool = False, require_terms: int = 0, lane: str = "",
     ) -> list[tuple[str, float]]:
+        index = self._text_index(domain, lane)
+        if not index:
+            return []
         cypher = (
-            f"CALL db.index.fulltext.queryNodes('{self._text_index(domain)}', $q) "
+            f"CALL db.index.fulltext.queryNodes('{index}', $q) "
             "YIELD node, score "
             "WHERE ($domain IS NULL OR node.domain = $domain) "
             + self._validity_clause("node")
@@ -620,20 +723,47 @@ class HybridRetriever:
         ).replace("$as_of_default", "datetime()")
 
     # -- expansion ---------------------------------------------------------
-    def expand_graph(self, seed_ids: list[str], hops: int = 1, limit: int = 40) -> list[dict]:
-        """1–2 hop typed expansion, weighted by edge confidence."""
+    def expand_graph(self, seed_ids: list[str], hops: int = 1, limit: int = 40,
+                     domain: str | None = None) -> list[dict]:
+        """1–2 hop typed expansion, weighted by edge confidence.
+
+        Two things the first version got wrong, both measured on the sixteen-book
+        graph:
+
+        * **Identity.** Seeds were matched on `id` alone. Ids are namespaced per
+          (book, slice) and the library holds the pilot's own two books, so the
+          same id exists in two domains and the walk started from — and ended
+          on — nodes belonging to a corpus nobody asked about. Same failure as
+          the loader's, same fix: match on (id, domain).
+        * **Cost.** 639 ms per expansion — the whole of the p95, on a query
+          whose answer was already found. `WHERE ($domain IS NULL OR
+          s.domain = $domain)` is idiomatic everywhere else in this file, and
+          harmless there because an index call drives the plan; here it IS the
+          plan, and the disjunction makes it unusable: profiled, Neo4j fell
+          back to NodeByLabelScan over all 199,655 entities and expanded
+          426,945 relationships to return 40 neighbours. The predicate is
+          therefore built into the statement rather than passed as a parameter
+          — one hop, written as one hop, seeking on (id, domain).
+        """
         if not seed_ids or hops < 1:
             return []
+        hops = min(hops, 2)
+        pattern = "-[r]-" if hops == 1 else f"-[r*1..{hops}]-"
+        weight = ("coalesce(r.weight, 1.0)" if hops == 1
+                  else "reduce(w = 1.0, x IN r | w * coalesce(x.weight, 1.0))")
+        scope_s = " AND s.domain = $domain" if domain else ""
+        scope_n = " AND n.domain = $domain" if domain else ""
         cypher = (
-            f"MATCH (s:Entity) WHERE s.id IN $ids "
-            f"MATCH (s)-[r*1..{min(hops, 2)}]-(n:Entity) "
-            f"WHERE NOT n.id IN $ids "
+            f"MATCH (s:Entity) WHERE s.id IN $ids{scope_s} "
+            f"MATCH (s){pattern}(n:Entity) "
+            f"WHERE NOT n.id IN $ids{scope_n} "
             + self._validity_clause("n")
-            + " WITH n, reduce(w = 1.0, x IN r | w * coalesce(x.weight, 1.0)) AS w "
+            + f" WITH n, {weight} AS w "
             "RETURN DISTINCT n.id AS id, w ORDER BY w DESC LIMIT $limit"
         )
         with self.loader._session() as s:
-            return [dict(r) for r in s.run(cypher, ids=seed_ids, limit=limit)]
+            return [dict(r) for r in s.run(cypher, ids=seed_ids, limit=limit,
+                                           domain=domain)]
 
     # -- hydration ---------------------------------------------------------
     def hydrate(self, node_ids: list[str]) -> dict[str, dict]:
@@ -695,6 +825,15 @@ class HybridRetriever:
         # the caller has already paid for the encoder before learning whether it
         # was needed; handing retrieval the means to encode lets it decide.
         # Measured on verification queries: 21.7 ms -> 5.9 ms.
+        # Which lanes this graph offers. Two lanes mean two ranked lists per
+        # channel instead of one, fused by the same RRF: the page layer stops
+        # competing with ten times its number of concept nodes for the same
+        # candidate slots, and starts competing only with itself.
+        lanes = self.lanes(domain)
+        page_lane = PAGE_LANE in lanes
+        if page_lane:
+            channel_counts["evidence_lane"] = 1
+
         lazy = embedding is None and embed_fn is not None
         if fast_path and "fulltext" in channels:
             # Require every term. That a single node contains all of them is
@@ -715,15 +854,63 @@ class HybridRetriever:
             if covered < MIN_TERM_COVERAGE:
                 probe = []
             if probe:
-                channel_counts["term_coverage"] = round(covered, 2)
-                best_fulltext = max(s for _, s in probe)
-                if True:
-                    ranked["fulltext:0"] = [i for i, _ in probe]
-                    channel_counts["fulltext"] = len(probe)
-                    channel_counts["fast_path"] = 1
+                # The evidence lane probes the page index too, and here it is
+                # the whole point: the corpus literally contains the phrase, and
+                # what settles the claim is the PAGE carrying it — which the
+                # domain-wide probe rarely returns, because concept nodes fill
+                # it.
+                #
+                # What the page probe must NOT do is decide that this path was
+                # taken. Letting it trigger the fast path on its own cost 14
+                # points of cross-language page recall (64.3% -> 50.0%,
+                # evidence/T99/context-recall): the fast path skips the
+                # encoder, and a question asked in French about an English book
+                # shares no words with the page that answers it — the semantic
+                # channel is the only way across. A French page containing the
+                # French words is not evidence that the encoder is unnecessary.
+                page_probe: list[tuple[str, float]] = []
+                if page_lane:
+                    page_probe, page_covered = self._lexical_evidence(
+                        query_text, domain, top_k, must, lane=PAGE_LANE)
+                    if page_covered >= MIN_TERM_COVERAGE and page_probe:
+                        lexical_coverage = max(lexical_coverage, page_covered)
+                        channel_counts["term_coverage_pages"] = round(page_covered, 2)
+                        ranked["fulltext:pages"] = [i for i, _ in page_probe]
+                        channel_counts["fulltext_pages"] = len(page_probe)
+                channel_counts["term_coverage"] = round(lexical_coverage, 2)
+                best_fulltext = max(s for _, s in probe + page_probe)
+                ranked["fulltext:0"] = [i for i, _ in probe]
+                channel_counts["fulltext"] = len(probe)
+                channel_counts["fast_path"] = 1
+                variants = variants[:1]
+                # The fast path settles SUPPORT — the corpus contains the
+                # phrase — and used to also skip the encoder, which is the most
+                # expensive step. That was measured on a two-book corpus, where
+                # full term coverage meant one passage. On sixteen books it
+                # means dozens: coverage 1.0 now says the words are present, not
+                # that the lexical order discriminates. Measured, all five
+                # remaining grounding failures took this path, and the page that
+                # answered sat at vector rank 1 in a channel that never ran.
+                #
+                # The optimisation was worth it when a query cost 400 ms against
+                # an 800 ms gate. It costs 33 ms now. So support still comes
+                # from the lexicon, and the encoder runs anyway.
+                # Measured both ways on the sixteen-book graph (evidence/T99):
+                #
+                #   encoder skipped (default)   canon 95.5%   Q2 page recall 78.9%
+                #   encoder kept                canon 87.0%   Q2 page recall 86.8%
+                #
+                # Neither dominates, because the two benchmarks ask different
+                # things: canon looks for a passage the caller can already
+                # quote, which is a lexical problem, and the semantic candidates
+                # crowd it out; Q2 asks questions in natural language, which is
+                # the opposite. So this is an operating point, not a bug, and it
+                # is exposed rather than decided in secret:
+                # ENTERPRIPHY_FAST_PATH_KEEPS_VECTOR=1 trades eight points of
+                # documentary grounding for eight points of question recall.
+                if os.environ.get("ENTERPRIPHY_FAST_PATH_KEEPS_VECTOR") != "1":
                     embedding = None
                     channels = tuple(c for c in channels if c != "vector")
-                    variants = variants[:1]
 
         if "vector" in channels and embedding is None and lazy:
             embedding = embed_fn(query_text)      # only now is it actually needed
@@ -732,13 +919,26 @@ class HybridRetriever:
             ranked["vector"] = [i for i, _ in vec]
             channel_counts["vector"] = len(vec)
             best_vector = max((s for _, s in vec), default=0.0)
+            if page_lane:
+                pvec = self.vector_search(embedding, top_k=top_k, domain=domain,
+                                          lane=PAGE_LANE)
+                if pvec:
+                    ranked["vector:pages"] = [i for i, _ in pvec]
+                    channel_counts["vector_pages"] = len(pvec)
+                    best_vector = max(best_vector, max(s for _, s in pvec))
 
-        if "fulltext" in channels and "fulltext:0" not in ranked:
+        if "fulltext" in channels and not channel_counts.get("fast_path"):
             for idx, variant in enumerate(variants):
                 ft = self.fulltext_search(variant, top_k=top_k, domain=domain)
                 if ft:
                     ranked[f"fulltext:{idx}"] = [i for i, _ in ft]
                     best_fulltext = max(best_fulltext, max(s for _, s in ft))
+                if page_lane:
+                    ftp = self.fulltext_search(variant, top_k=top_k, domain=domain,
+                                               lane=PAGE_LANE)
+                    if ftp:
+                        ranked[f"fulltext:pages:{idx}"] = [i for i, _ in ftp]
+                        best_fulltext = max(best_fulltext, max(s for _, s in ftp))
             channel_counts["fulltext"] = sum(
                 len(v) for k, v in ranked.items() if k.startswith("fulltext")
             )
@@ -788,7 +988,7 @@ class HybridRetriever:
             channels = tuple(c for c in channels if c != "graph")
 
         if "graph" in channels and hops:
-            for row in self.expand_graph(seed_ids, hops=hops):
+            for row in self.expand_graph(seed_ids, hops=hops, domain=domain):
                 # Expansion contributes below any directly-retrieved seed.
                 fused.setdefault(row["id"], 0.0)
                 fused[row["id"]] += 0.5 / (RRF_K + seeds) * float(row.get("w") or 1.0)
@@ -824,6 +1024,8 @@ class HybridRetriever:
             hits.append(hit)
 
         hits.sort(key=lambda h: -h.score)
+        if os.environ.get("ENTERPRIPHY_PAGE_DEDUPE", "1") != "0":
+            hits = dedupe_by_page(hits, window=result_window)
         if balance_methods:
             hits = balance_by_method(hits, window=result_window)
 
