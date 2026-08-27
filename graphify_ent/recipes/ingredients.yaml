@@ -22,7 +22,7 @@
 # classified by its head noun. Order within a list does not matter; position in
 # the LINE does.
 
-version: 4
+version: 5
 
 units:
   # ml per unit of volume
@@ -44,13 +44,24 @@ units:
     "fl oz": 30.0
     pt: 473.0
     pint: 473.0
+    pints: 473.0
     qt: 946.0
     quart: 946.0
+    quarts: 946.0
+    # the unit that produced the verify_claim defect (ADR-0004): a figure the
+    # table does not know is a figure nothing downstream can contradict
+    gal: 3785.0
+    gallon: 3785.0
+    gallons: 3785.0
+    litres: 1000.0
+    liters: 1000.0
   # grams per unit of mass
   mass_g:
     mg: 0.001
     g: 1.0
     gr: 1.0
+    gram: 1.0
+    grams: 1.0
     kg: 1000.0
     oz: 28.35
     ounce: 28.35
@@ -58,6 +69,15 @@ units:
     lb: 453.6
     pound: 453.6
     pounds: 453.6
+  # temperature TOKENS and their scale; the °F→°C formula needs an offset,
+  # so it lives in graphify_ent/quantities.py, not in a factor table
+  temperature:
+    "°c": c
+    "°f": f
+    "degrees c": c
+    "degrees f": f
+    "degree c": c
+    "degree f": f
 
 # Phrases that state a quantity without giving one. They count for PRESENCE —
 # which with rarity weighting is already half of identity — and never for the

@@ -263,12 +263,17 @@ class TestRegistryIsPluggable:
         assert len(reg.ingredients) >= 60
 
     def test_no_ingredient_name_is_hardcoded_in_the_module(self):
-        """The check that keeps the rule honest as the module grows."""
+        """The check that keeps the rule honest as the module grows — and it
+        follows the grammar to its promoted home (ADR-0004 Q2)."""
         from pathlib import Path
-        src = (Path(__file__).resolve().parent.parent / "graphify_ent" /
-               "recipes" / "ingredients.py").read_text()
-        code = "\n".join(ln for ln in src.splitlines()
-                         if not ln.lstrip().startswith("#"))
-        code = code[code.index("MEASURED = "):]        # past the module docstring
-        for name in ("mascarpone", "ladyfinger", "savoiardi", "gruyere"):
-            assert name not in code.lower(), name
+        root = Path(__file__).resolve().parent.parent / "graphify_ent"
+        # file -> first line of code after its module docstring
+        anchors = {root / "recipes" / "ingredients.py": "DEFAULT_REGISTRY = ",
+                   root / "quantities.py": "MEASURED = "}
+        for path, anchor in anchors.items():
+            src = path.read_text()
+            code = "\n".join(ln for ln in src.splitlines()
+                             if not ln.lstrip().startswith("#"))
+            code = code[code.index(anchor):]           # past the module docstring
+            for name in ("mascarpone", "ladyfinger", "savoiardi", "gruyere"):
+                assert name not in code.lower(), f"{name} in {path.name}"

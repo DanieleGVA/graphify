@@ -42,10 +42,25 @@ from __future__ import annotations
 
 import os
 import re
-import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+
+# The number grammar, the four resolution classes and `norm` were promoted to
+# graphify_ent.quantities (ADR-0004 Q2): ONE grammar for the recipe layer,
+# verify and the canonical fact layer. Re-imported here so R1's public API and
+# every existing caller stay exactly as they were.
+from graphify_ent.quantities import (
+    CONVERTED_PIECE,
+    CONVERTED_VOLUME,
+    MEASURED,
+    UNCERTAINTY,
+    UNQUANTIFIED,
+    FRACTIONS as _FRACTIONS,
+    NUM as _NUM,
+    norm,
+    number as _to_float,
+)
 
 __all__ = [
     "CONVERTED_PIECE",
@@ -61,25 +76,7 @@ __all__ = [
     "resolve_line",
 ]
 
-MEASURED = "MEASURED"
-CONVERTED_VOLUME = "CONVERTED_VOLUME"
-CONVERTED_PIECE = "CONVERTED_PIECE"
-UNQUANTIFIED = "UNQUANTIFIED"
-
-#: Declared uncertainty per class. A converted figure is not a measured one and
-#: the score has to be able to say so; hiding the difference is how a table of
-#: approximations turns into false precision.
-UNCERTAINTY = {MEASURED: 0.0, CONVERTED_VOLUME: 0.15,
-               CONVERTED_PIECE: 0.10, UNQUANTIFIED: 1.0}
-
 DEFAULT_REGISTRY = Path(__file__).with_name("ingredients.yaml")
-
-_FRACTIONS = {"¼": 0.25, "½": 0.5, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3,
-              "⅛": 0.125, "⅜": 0.375, "⅝": 0.625, "⅞": 0.875}
-#: A quantity as books write it: "2", "1.5", "1,5", "1/2", "1 1/2". The mixed
-#: number comes FIRST in the alternation or "1 1/2" is read as a bare 1.
-_NUM = (r"\d+\s+\d+\s*/\s*\d+|\d+\s*/\s*\d+|"
-        r"\d+\s*[¼½¾⅓⅔⅛⅜⅝⅞]|\d+(?:[.,]\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞]")
 
 #: How many lines one ingredient row may span. A flattened table row is name +
 #: US column + metric column; beyond that the "row" has swallowed prose.
@@ -87,47 +84,6 @@ MAX_ROW_LINES = 4
 
 #: Units a book prints as its working figure when it prints two systems.
 _METRIC_MASS = {"mg", "g", "gr", "kg"}
-
-
-def norm(s: str) -> str:
-    """Accent- and case-insensitive form. The corpus holds three languages and
-    the same word in two spellings; comparing raw text loses half of it.
-
-    NFKD also takes vulgar fractions apart — "½" becomes "1⁄2" with a FRACTION
-    SLASH — and that quietly changed a quantity: "½ cup" was read as "2 cup",
-    because the denominator is a digit sitting next to the unit. Mapping the
-    fraction slash to an ordinary one turns it back into something the number
-    parser reads as a half.
-    """
-    s = unicodedata.normalize("NFKD", s or "")
-    s = "".join(c for c in s if not unicodedata.combining(c))
-    s = s.replace("\u2044", "/")
-    return re.sub(r"\s+", " ", s).strip().lower()
-
-
-def _to_float(tok: str) -> float | None:
-    tok = (tok or "").strip().replace(",", ".")
-    m = re.match(r"^(\d+)\s*([¼½¾⅓⅔⅛⅜⅝⅞])$", tok)
-    if m:
-        return float(m.group(1)) + _FRACTIONS[m.group(2)]
-    if tok in _FRACTIONS:
-        return _FRACTIONS[tok]
-    m = re.match(r"^(\d+)\s+(\d+)\s*/\s*(\d+)$", tok)      # "1 1/2"
-    if m:
-        try:
-            return float(m.group(1)) + float(m.group(2)) / float(m.group(3))
-        except ZeroDivisionError:
-            return None
-    if "/" in tok:
-        a, _, b = tok.partition("/")
-        try:
-            return float(a.strip()) / float(b.strip())
-        except (ValueError, ZeroDivisionError):
-            return None
-    try:
-        return float(tok)
-    except ValueError:
-        return None
 
 
 @dataclass(frozen=True)
