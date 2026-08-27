@@ -1,0 +1,449 @@
+# Canonical ingredient registry — pluggable, per the DOMAIN-AGNOSTIC rule.
+#
+# Nothing in the code knows a single ingredient name: this file is the whole
+# vocabulary, and another domain replaces it wholesale
+# (ENTERPRIPHY_INGREDIENTS points elsewhere).
+#
+# Two things every entry may carry, and both were measured before being trusted
+# (evidence/T98, 1,433 dual-unit lines mined from the corpus as free ground
+# truth — the books state "¾ cup (180 ml)" themselves, so the table can be
+# checked against the authors):
+#
+#   density  g/ml, used to turn a volume into grams. Median error against the
+#            books' own equivalences: 6.2% (acceptance was 15%). Sugar is the
+#            worst entry at exactly 15%.
+#   unit_g   grams per piece, for lines that count instead of weighing.
+#
+# **Density is per STATE, not per substance.** `cream` and `cream_whipped` are
+# separate entries because whipping halves the density: taking one for the other
+# was a 150% error in the measurement, which is why the state is in the name.
+#
+# `synonyms` are matched leftmost-first inside a line, so an ingredient line is
+# classified by its head noun. Order within a list does not matter; position in
+# the LINE does.
+
+version: 1
+
+units:
+  # ml per unit of volume
+  volume_ml:
+    ml: 1.0
+    cl: 10.0
+    dl: 100.0
+    l: 1000.0
+    litre: 1000.0
+    liter: 1000.0
+    cup: 240.0
+    cups: 240.0
+    tbsp: 15.0
+    tablespoon: 15.0
+    tablespoons: 15.0
+    tsp: 5.0
+    teaspoon: 5.0
+    teaspoons: 5.0
+    "fl oz": 30.0
+    pt: 473.0
+    pint: 473.0
+    qt: 946.0
+    quart: 946.0
+  # grams per unit of mass
+  mass_g:
+    mg: 0.001
+    g: 1.0
+    gr: 1.0
+    kg: 1000.0
+    oz: 28.35
+    ounce: 28.35
+    ounces: 28.35
+    lb: 453.6
+    pound: 453.6
+    pounds: 453.6
+
+# Phrases that state a quantity without giving one. They count for PRESENCE —
+# which with rarity weighting is already half of identity — and never for the
+# proportions.
+unquantified:
+  - to taste
+  - as needed
+  - as required
+  - a pinch
+  - pinch
+  - q.b.
+  - qb
+  - quanto basta
+  - a piacere
+  - au goût
+  - selon le goût
+  - à volonté
+
+ingredients:
+
+  # --- flours, starches, raising -----------------------------------------
+  flour:
+    synonyms: [all-purpose flour, plain flour, bread flour, cake flour, flour,
+               farina, farine, harina]
+    density: 0.50
+  wholemeal_flour:
+    synonyms: [whole wheat flour, wholemeal flour, farina integrale,
+               farine complète, farine complete]
+    density: 0.48
+  semolina:
+    synonyms: [semolina, semola, semoule]
+    density: 0.65
+  cornstarch:
+    synonyms: [cornstarch, corn starch, cornflour, maizena, amido di mais, amido,
+               fécule de maïs, fecule de mais]
+    density: 0.53
+  potato_starch:
+    synonyms: [potato starch, fecola, fécule de pomme de terre]
+    density: 0.55
+  rice:
+    synonyms: [rice, riso, riz]
+    density: 0.85
+  baking_powder:
+    synonyms: [baking powder, lievito in polvere, levure chimique]
+    density: 0.90
+  baking_soda:
+    synonyms: [baking soda, bicarbonate of soda, bicarbonate, bicarbonato]
+    density: 0.90
+  yeast:
+    synonyms: [fresh yeast, dry yeast, instant yeast, yeast, lievito di birra,
+               lievito, levure]
+    density: 0.60
+  gelatin:
+    synonyms: [gelatin sheet, gelatin leaves, gelatine, gelatin, gelatina,
+               colla di pesce, gélatine, gelatine en feuilles]
+    unit_g: 2.5
+    density: 0.70
+
+  # --- sugars and syrups --------------------------------------------------
+  sugar:
+    synonyms: [granulated sugar, caster sugar, superfine sugar, white sugar,
+               sugar, zucchero semolato, zucchero, sucre semoule, sucre]
+    density: 0.85
+  powdered_sugar:
+    synonyms: [powdered sugar, confectioners sugar, confectioners' sugar,
+               icing sugar, sugar icing, sugar powdered, zucchero a velo,
+               sucre glace]
+    density: 0.50
+  brown_sugar:
+    synonyms: [brown sugar, muscovado, cassonade, zucchero di canna]
+    density: 0.80
+  honey:
+    synonyms: [honey, miele, miel]
+    density: 1.42
+  glucose:
+    synonyms: [glucose syrup, glucose, glucosio, corn syrup, trimoline,
+               invert sugar, sciroppo di glucosio]
+    density: 1.40
+  molasses:
+    synonyms: [molasses, treacle, melassa, mélasse]
+    density: 1.40
+  maple_syrup:
+    synonyms: [maple syrup, sciroppo d'acero, sirop d'érable]
+    density: 1.33
+  malt_syrup:
+    synonyms: [malt syrup, diastatic malt, malt, malto]
+    density: 1.40
+
+  # --- dairy and fats -----------------------------------------------------
+  butter:
+    synonyms: [unsalted butter, clarified butter, butter, burro, beurre]
+    density: 0.95
+  milk:
+    synonyms: [whole milk, milk, latte, lait]
+    density: 1.03
+  cream:
+    synonyms: [heavy cream, whipping cream, double cream, cream, panna,
+               crème fraîche, creme fraiche, crème, creme]
+    density: 1.00
+  cream_whipped:
+    synonyms: [whipped cream, panna montata, crème fouettée, creme fouettee]
+    density: 0.40
+  mascarpone:
+    synonyms: [mascarpone]
+    density: 1.00
+  ricotta:
+    synonyms: [ricotta]
+    density: 1.00
+  yogurt:
+    synonyms: [yogurt, yoghurt, yaourt]
+    density: 1.03
+  cheese:
+    synonyms: [gruyere, gruyère, parmesan, parmigiano, cheddar, emmental,
+               pecorino, cheese, formaggio, fromage]
+    density: 0.45
+  oil:
+    synonyms: [olive oil, vegetable oil, sunflower oil, oil, olio, huile]
+    density: 0.92
+  lard:
+    synonyms: [lard, strutto, saindoux]
+    density: 0.92
+
+  # --- eggs ---------------------------------------------------------------
+  egg:
+    synonyms: [whole egg, whole eggs, eggs, egg, uova, uovo, oeufs, oeuf, œufs, œuf]
+    unit_g: 50.0
+  egg_yolk:
+    synonyms: [egg yolks, egg yolk, yolks, yolk, tuorli, tuorlo, jaunes, jaune]
+    unit_g: 18.0
+  egg_white:
+    synonyms: [egg whites, egg white, whites, albumi, albume, blancs, blanc d]
+    unit_g: 30.0
+
+  # --- chocolate, coffee, flavour ----------------------------------------
+  chocolate:
+    synonyms: [dark chocolate, bittersweet chocolate, couverture, chocolate,
+               cioccolato, chocolat]
+    density: 0.65
+  cocoa:
+    synonyms: [cocoa powder, cocoa, cacao]
+    density: 0.50
+  coffee:
+    synonyms: [espresso, instant coffee, coffee, caffè, caffe, café, moka, trablit]
+    density: 1.00
+  vanilla:
+    synonyms: [vanilla pod, vanilla bean, vanilla extract, vanilla, vaniglia,
+               vanille]
+    unit_g: 3.0
+  salt:
+    synonyms: [kosher salt, sea salt, salt, sale, sel]
+    density: 1.20
+  pepper:
+    synonyms: [black pepper, white pepper, pepper, pepe, poivre]
+    density: 0.50
+  cinnamon:
+    synonyms: [cinnamon, cannella, cannelle]
+    density: 0.45
+  nutmeg:
+    synonyms: [nutmeg, noce moscata, muscade]
+    density: 0.50
+  saffron:
+    synonyms: [saffron, zafferano, safran]
+    density: 0.30
+  mustard:
+    synonyms: [dijon mustard, mustard, senape, moutarde]
+    density: 1.05
+  lemon:
+    synonyms: [lemon zest, lemon juice, grated lemon, lemon, limone, citron]
+    unit_g: 100.0
+    density: 1.02
+  orange:
+    synonyms: [orange zest, orange juice, grated orange, orange, arancia]
+    unit_g: 130.0
+    density: 1.02
+  lime:
+    synonyms: [lime juice, lime zest, lime]
+    unit_g: 70.0
+    density: 1.02
+  candied_peel:
+    synonyms: [mixed candied peel, candied peel, candied fruit, canditi,
+               fruits confits]
+    density: 0.80
+  chestnut:
+    synonyms: [chestnut puree, chestnuts, chestnut, castagne, marroni,
+               marrons, châtaignes, chataignes]
+    density: 0.90
+  raisin:
+    synonyms: [raisins, raisin, sultanas, currants, uvetta, uva passa,
+               raisins secs]
+    density: 0.65
+
+  # --- nuts ---------------------------------------------------------------
+  almond:
+    synonyms: [almond flour, ground almonds, almonds, almond, mandorle, mandorla,
+               amandes, amande]
+    density: 0.60
+  hazelnut:
+    synonyms: [hazelnuts, hazelnut, nocciole, nocciola, noisettes, noisette]
+    density: 0.60
+  pistachio:
+    synonyms: [pistachio paste, pistachios, pistachio, pistacchi, pistacchio,
+               pistaches, pistache]
+    density: 0.60
+  walnut:
+    synonyms: [walnuts, walnut, noci, noce, noix]
+    density: 0.55
+
+  # --- liquids and alcohol -------------------------------------------------
+  water:
+    synonyms: [cold water, water, acqua, eau]
+    density: 1.00
+  wine:
+    synonyms: [white wine, red wine, wine, vino, vin]
+    density: 0.99
+  marsala:
+    synonyms: [marsala]
+    density: 1.03
+  rum:
+    synonyms: [dark rum, rum, rhum]
+    density: 0.94
+  coffee_liqueur:
+    synonyms: [coffee liqueur, liqueur coffee, kahlua, borghetti]
+    density: 1.05
+  vinegar:
+    synonyms: [vinegar, aceto, vinaigre]
+    density: 1.01
+  worcestershire:
+    synonyms: [worcestershire sauce, worcestershire]
+    density: 1.10
+  hot_sauce:
+    synonyms: [hot sauce, tabasco]
+    density: 1.05
+  sherry:
+    synonyms: [dry sherry, sherry, jerez]
+    density: 0.98
+  stock:
+    synonyms: [chicken stock, veal stock, beef stock, fish stock, stock, broth,
+               brodo, fond, bouillon]
+    density: 1.00
+
+  # --- vegetables and aromatics -------------------------------------------
+  onion:
+    synonyms: [onions, onion, cipolla, cipolle, oignon]
+    density: 0.60
+  garlic:
+    synonyms: [garlic, aglio, ail]
+    density: 0.60
+  carrot:
+    synonyms: [carrots, carrot, carote, carota, carotte]
+    density: 0.60
+  celery:
+    synonyms: [celery, sedano, céleri, celeri]
+    density: 0.55
+  apple:
+    synonyms: [apples, apple, mele, mela, pommes, pomme, calvados]
+    unit_g: 180.0
+    density: 0.85
+  raspberry:
+    synonyms: [raspberries, raspberry, lamponi, framboises]
+    density: 0.85
+  coconut:
+    synonyms: [coconut, cocco, noix de coco]
+    density: 0.45
+  kumquat:
+    synonyms: [kumquats, kumquat]
+    density: 0.90
+  apricot:
+    synonyms: [apricot glaze, apricots, apricot, albicocche, abricots]
+    density: 1.10
+  lentil:
+    synonyms: [lentils, lentil, lenticchie, lentilles]
+    density: 0.85
+  tofu:
+    synonyms: [tofu]
+    density: 1.00
+  wakame:
+    synonyms: [wakame seaweed, wakame, seaweed, alga]
+    density: 0.30
+  anchovy:
+    synonyms: [anchovy fillets, anchovies, anchovy, acciughe, anchois]
+    density: 1.00
+  xanthan:
+    synonyms: [xanthan gum, xanthan]
+    density: 0.60
+  tomato:
+    synonyms: [plum tomatoes, canned tomatoes, tomato, tomatoes, pomodoro,
+               pomodori, tomate]
+    density: 0.90
+  potato:
+    synonyms: [potatoes, potato, patate, patata, pomme de terre]
+    density: 0.65
+  mushroom:
+    synonyms: [mushrooms, mushroom, funghi, fungo, champignons, champignon]
+    density: 0.35
+  basil:
+    synonyms: [basil, basilico, basilic]
+    density: 0.20
+  parsley:
+    synonyms: [parsley, prezzemolo, persil]
+    density: 0.20
+  ginger:
+    synonyms: [ginger, zenzero, gingembre]
+    density: 0.55
+  clove:
+    synonyms: [cloves, clove, chiodi di garofano, girofle]
+    density: 0.50
+  paprika:
+    synonyms: [paprika]
+    density: 0.45
+  thyme:
+    synonyms: [thyme, timo, thym]
+    density: 0.30
+  rosemary:
+    synonyms: [rosemary, rosmarino, romarin]
+    density: 0.30
+  oregano:
+    synonyms: [oregano, origano, origan]
+    density: 0.30
+  chervil:
+    synonyms: [chervil, cerfoglio, cerfeuil]
+    density: 0.20
+  scallion:
+    synonyms: [scallions, scallion, spring onions, spring onion, cipollotto]
+    density: 0.50
+  shallot:
+    synonyms: [shallots, shallot, scalogno, échalote, echalote]
+    density: 0.60
+  chive:
+    synonyms: [chives, chive, erba cipollina, ciboulette]
+    density: 0.25
+
+  # --- meat and fish -------------------------------------------------------
+  beef:
+    synonyms: [ground beef, beef, manzo, boeuf, bœuf]
+    density: 1.00
+  pork:
+    synonyms: [pork, maiale, porc]
+    density: 1.00
+  veal:
+    synonyms: [veal, vitello, veau]
+    density: 1.00
+  chicken:
+    synonyms: [chicken, pollo, poulet]
+    density: 1.00
+  fish:
+    synonyms: [fish, carp, carpe, pesce, poisson]
+    density: 1.00
+  shrimp:
+    synonyms: [shrimp, prawns, gamberi, crevettes]
+    density: 1.00
+  lobster:
+    synonyms: [lobster, homard, homards, astice, aragosta]
+    density: 1.00
+  spinach:
+    synonyms: [spinach, spinaci, épinards, epinards]
+    density: 0.25
+  broccoli:
+    synonyms: [broccoli, broccolo]
+    density: 0.40
+
+  # --- pastry components ---------------------------------------------------
+  ladyfinger:
+    synonyms: [ladyfingers, ladyfinger, savoiardi, savoiardo, sponge fingers,
+               biscuit à la cuillère, biscuit a la cuillere, sponge, biscuit]
+    unit_g: 12.0
+  breadcrumbs:
+    synonyms: [breadcrumbs, bread crumbs, pangrattato, chapelure]
+    density: 0.35
+  pasta:
+    synonyms: [pasta, spaghetti, tagliatelle, maccheroni]
+    density: 0.60
+  dashi:
+    synonyms: [dashi]
+    density: 1.00
+  soy_sauce:
+    synonyms: [soy sauce, salsa di soia, sauce soja, shoyu]
+    density: 1.15
+  mirin:
+    synonyms: [mirin]
+    density: 1.10
+  sake:
+    synonyms: [sake, saké]
+    density: 0.99
+  brandy:
+    synonyms: [brandy, cognac, whiskey, whisky, kirsch, grand marnier]
+    density: 0.95
+  miso:
+    synonyms: [miso]
+    density: 1.20
