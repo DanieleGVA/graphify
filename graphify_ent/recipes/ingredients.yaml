@@ -22,7 +22,7 @@
 # classified by its head noun. Order within a list does not matter; position in
 # the LINE does.
 
-version: 1
+version: 2
 
 units:
   # ml per unit of volume
@@ -429,6 +429,94 @@ ingredients:
   pasta:
     synonyms: [pasta, spaghetti, tagliatelle, maccheroni]
     density: 0.60
+  # --- prepared components ------------------------------------------------
+  # A board card is often an ASSEMBLY: "CHOUX PASTRY 1000 g", "MOUSSELINE
+  # HAZELNUT CREAM 900 g" — sub-components, not raw ingredients, and the raw
+  # flour and butter live on another card entirely. The component NAME is the
+  # identity there, and the books name their components too ("pâte à choux",
+  # "crème pâtissière"), so these entries let an assembly card and the page
+  # that teaches its component recognise each other. Measured before this
+  # existed: the Paris-Brest query reduced to its decoration (chocolate 0.46,
+  # icing sugar) and ranked its true reference 1,264th.
+  choux_pastry:
+    synonyms: [choux pastry, choux paste, pate a choux, pâte à choux,
+               pasta choux, bigne]
+    density: 1.00
+  pastry_cream:
+    synonyms: [pastry cream, creme patissiere, crème pâtissière,
+               crema pasticcera, crema pasticciera]
+    density: 1.00
+  mousseline:
+    synonyms: [mousseline cream, mousseline]
+    density: 0.80
+  ganache:
+    synonyms: [ganache]
+    density: 1.10
+  meringue:
+    synonyms: [meringue, meringa, italian meringue, swiss meringue]
+    density: 0.50
+  sponge_cake:
+    synonyms: [sponge cake, genoise, génoise, pan di spagna, joconde,
+               biscuit joconde, sponge sheet]
+    density: 0.45
+  puff_pastry:
+    synonyms: [puff pastry, pate feuilletee, pâte feuilletée, pasta sfoglia,
+               sfoglia]
+    density: 0.90
+  shortcrust:
+    synonyms: [shortcrust, pate sucree, pâte sucrée, pate sablee, pâte sablée,
+               pasta frolla, frolla, sweet dough]
+    density: 0.95
+  buttercream:
+    synonyms: [buttercream, butter cream, creme au beurre, crème au beurre,
+               crema al burro]
+    density: 0.90
+  custard:
+    synonyms: [custard, creme anglaise, crème anglaise, crema inglese]
+    density: 1.05
+  caramel:
+    synonyms: [caramel sauce, caramel, caramello]
+    density: 1.30
+  praline:
+    synonyms: [praline paste, praline, pralinato, pralin]
+    density: 1.20
+  nougatine:
+    synonyms: [nougatine, nougat, torrone]
+    density: 1.10
+  fondant:
+    synonyms: [fondant]
+    density: 1.30
+  marzipan:
+    synonyms: [marzipan, marzapane, pate d'amande, pâte d'amande,
+               almond paste]
+    density: 1.20
+  chantilly:
+    synonyms: [chantilly]
+    density: 0.40
+  dessert_syrup:
+    synonyms: [dessert syrup, simple syrup, sciroppo, sirop]
+    density: 1.25
+  bechamel:
+    synonyms: [bechamel, béchamel, besciamella]
+    density: 1.05
+  veloute:
+    synonyms: [veloute, velouté, vellutata]
+    density: 1.05
+  demi_glace:
+    synonyms: [demi-glace, demi glace, demiglace]
+    density: 1.10
+  roux:
+    synonyms: [roux]
+    density: 0.95
+  mirepoix:
+    synonyms: [mirepoix]
+    density: 0.60
+  tortilla:
+    synonyms: [tortilla chips, tortillas, tortilla, tostadas]
+    density: 0.40
+  bean:
+    synonyms: [black beans, beans, bean, fagioli, haricots]
+    density: 0.85
   dashi:
     synonyms: [dashi]
     density: 1.00

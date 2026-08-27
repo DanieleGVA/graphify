@@ -369,7 +369,15 @@ def parse_block(text: str, registry: Registry | None = None) -> list[Resolved]:
         #
         # Without this, "Egg yolks / 2 yolks / 2 yolks" is read as two separate
         # ingredients and the recipe silently doubles.
-        if canon and canon != current_canon:
+        # A line naming the SAME canonical can be two different things, and
+        # the difference is whether it carries its own mass or volume:
+        #   "2 yolks" under "Egg yolks"      -> the other COLUMN of one row
+        #   "CREAM ... 580 g" twice          -> two REAL lines, 580 g each
+        # Merging both halved the cream of a real card (580 for 1,160);
+        # splitting both doubled Gisslen's egg yolks. A count alone never
+        # opens a row — counts are how table columns repeat.
+        own_mass = any(k == "mass" or k == "volume" for _, _, k in reg.quantities(line))
+        if canon and (canon != current_canon or own_mass):
             if current:
                 rows.append(current)
             current, current_canon = [line], canon
