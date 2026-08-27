@@ -364,3 +364,48 @@ class TestConflicted:
     def test_agreeing_documents_do_not_conflict(self):
         f = _verifier(RAGU_A, RAGU_A).check(Claim("Ragu", "milk quantity", "500 g"))
         assert f.verdict == SUPPORTED and f.conflict is None
+
+    def test_a_subject_matched_stray_cannot_manufacture_a_conflict(self):
+        """Measured on T74: the steam-table rule (57°C, reached only through
+        the subject) manufactured a conflict with the reheat rule (74°C,
+        named by the aspect). Two different rules are not two readings of
+        one: an aspect-matched read outranks a subject fallback."""
+        rule = ("Reheated foods must be reheated to at least 165°F/74°C "
+                "for a minimum of 15 seconds.")
+        stray = "A steam table will hold reheated foods above 135°F/57°C."
+        f = _verifier(rule, stray).check(
+            Claim("reheated foods", "reheated to at least", "74°C"))
+        assert f.verdict == SUPPORTED
+
+
+class TestTwoLevelAspectCoverage:
+    """Measured on T74: "sugar for egg whites" names TWO rows of one recipe —
+    no single row carries both words, and requiring anchor-level coverage of
+    the whole aspect turned a true claim unverifiable. The anchor must name
+    at least one discriminating token; the rest may live in the passage."""
+
+    MERINGUE = (
+        "Swiss Meringue\n"
+        "Ingredients\n"
+        "Egg whites\n"
+        "8 oz\n"
+        "227 g\n"
+        "Sugar\n"
+        "1 lb\n"
+        "454 g\n"
+        "Vanilla extract\n"
+        "2 tsp\n"
+        "10 mL\n"
+    )
+
+    def test_the_aspect_may_span_two_rows_of_one_recipe(self):
+        f = _verifier(self.MERINGUE).check(
+            Claim("Swiss Meringue", "sugar for egg whites", "454 g"))
+        assert f.verdict == SUPPORTED
+        assert "Sugar" in f.evidence          # the owning row decides
+
+    def test_but_the_anchor_must_name_at_least_one_token(self):
+        """The yield-line rule survives: an anchor naming NO aspect token is
+        never a hit, page words or not — "1 gal" stays out of milk claims."""
+        f = _verifier(BECHAMEL).check(Claim("Bechamel Sauce", "milk quantity", "1 gal"))
+        assert f.verdict == CONTRADICTED

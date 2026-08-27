@@ -531,7 +531,8 @@ class Verifier:
                 return True
         return False
 
-    def _address(self, claim: Claim, cqs, toks: list[str], facts: list):
+    def _address(self, claim: Claim, cqs, toks: list[str], facts: list,
+                 passage: str = ""):
         """The facts of one document that speak to this claim, decided.
 
         The ASPECT names which figure is meant, so aspect-anchored facts
@@ -547,8 +548,25 @@ class Verifier:
             return None
         group = []
         if toks:
-            hits = [f for f in cands
-                    if self._covers(toks, f.anchor_text) >= self.aspect_coverage]
+            # Coverage is read at two levels: the anchor must name at least
+            # one discriminating token — the yield line names no ingredient,
+            # which is what keeps "1 gal" out of a milk claim — and the REST
+            # of the aspect may live anywhere in the passage. "Sugar for egg
+            # whites" names two rows of one recipe: no single row carries
+            # both words, and requiring it turned a true claim unverifiable
+            # (measured, T74 re-baseline).
+            page = norm(passage)
+            hits = []
+            for f in cands:
+                if self._covers(toks, f.anchor_text) >= self.aspect_coverage:
+                    hits.append(f)
+                    continue
+                anchored = [t for t in toks
+                            if any(v in norm(f.anchor_text) for v in self._variants(t))]
+                rest = [t for t in toks if t not in anchored]
+                if anchored and all(
+                        any(v in page for v in self._variants(t)) for t in rest):
+                    hits.append(f)
             exact = [f for f in hits if f.anchor_kind == "table-row"]
             group = exact or hits
         if not group:
@@ -568,8 +586,10 @@ class Verifier:
                 temps = {round(f.value_lo) for f in group if f.unit_base == "c"}
                 if len(temps) > 1:
                     return None
+            agree = [f for f in group if self._agrees(cqs, f)]
+            return (bool(agree), (agree or group)[0], group, "subject")
         agree = [f for f in group if self._agrees(cqs, f)]
-        return (bool(agree), (agree or group)[0], group)
+        return (bool(agree), (agree or group)[0], group, "aspect")
 
     def _check_facts(self, claim: Claim, cqs, t0) -> Finding:
         import time
@@ -589,11 +609,20 @@ class Verifier:
             text = d.get("passage") or d.get("text_excerpt") or ""
             if not self._names(claim.subject, norm(text)):
                 continue
-            decided = self._address(claim, cqs, toks, self._facts_for(d))
+            decided = self._address(claim, cqs, toks, self._facts_for(d), text)
             if decided is None:
                 continue
-            agreed, fact, group = decided
-            (sup if agreed else con).append((d, fact, group))
+            agreed, fact, group, how = decided
+            (sup if agreed else con).append((d, fact, group, how))
+        # A fact reached THROUGH THE ASPECT is a stronger read than one
+        # reached through the subject fallback — the same outranking the ADR
+        # states for anchors, one level up. Measured: the steam-table rule
+        # (57°C, subject-matched off a narrow node) manufactured a conflict
+        # with the reheat rule (74°C, aspect-matched) — two different rules,
+        # not two readings of one.
+        if any(how == "aspect" for *_, how in sup + con):
+            sup = [x for x in sup if x[3] == "aspect"]
+            con = [x for x in con if x[3] == "aspect"]
 
         def cite(d, f):
             return {"source_file": d.get("source_file", ""),
@@ -616,7 +645,7 @@ class Verifier:
                            conflict={"for": a, "against": b},
                            latency_ms=done(), channel=channel)
         if sup:
-            d, f, _ = sup[0]
+            d, f, _, _ = sup[0]
             return Finding(claim, SUPPORTED, evidence=f.raw_text,
                            source_file=d.get("source_file", ""),
                            source_location=d.get("source_location", ""),
@@ -624,7 +653,7 @@ class Verifier:
                                    f"[{f.anchor_kind}]"),
                            normalized=normalized, latency_ms=done(), channel=channel)
         if con:
-            d, f, group = con[0]
+            d, f, group, _ = con[0]
             vals = ", ".join(f"{g.value_lo:g} {g.unit_base}" for g in group[:4])
             return Finding(claim, CONTRADICTED, evidence=f.raw_text,
                            source_file=d.get("source_file", ""),
